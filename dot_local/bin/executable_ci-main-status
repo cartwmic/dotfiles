@@ -21,7 +21,10 @@ reason goes to stderr. A red verdict that is not a GitHub run (the coordinator's
   Tied: the PR carries a link line naming the red commit's full 40-digit sha, the same line that handles a hidden red (below):
   `Handles: <sha>` or git's "This reverts commit <sha>", in a commit message of the PR, or in the PR description for a repo that squashes
   from the PR body (storycraft), the place the squash merge will carry it to main. One line for each red the rule passes; a short sha does not
-  count. A green run alone is not a tie: a red that a flaky test made would let every green PR through. The refusal names each red it
+  count. A repo whose row has `handles_labels` (dotfiles: `flaky test`, `bug`) ties a `Handles:` line only when the same message also names an issue
+  (`#N`) of the repo whose body holds that red's full sha and that carries one of those labels, so every red cleared by hand has an issue on record that
+  names it; a revert line needs none, nor a red the pin-fix rule passes (it is judged before this one), nor a link already on main. A green run
+  alone is not a tie: a red that a flaky test made would let every green PR through. The refusal names each red it
   lacks and the exact line to add. The run is a run of the same
   workflow whose failure made main red, on PR N's head commit or on a commit with the same tree. It counts only when every job
   that did not pass in main's red run ran in it and passed, and so did each step that failed there. A job or step that was
@@ -275,7 +278,8 @@ from urllib.parse import quote, urlparse
 REPOS = {
     # "since": the grandfather commit, one fixed commit per repo (the date after each is its committer date): red runs on it and its ancestors are
     # not held against main. Move it forward to main's tip right before this ships, never back.
-    "dotfiles": {"github": "cartwmic/dotfiles", "workflow": "ci.yml", "since": "c666fb34ef3f24c34cb1b6ab7b79334c09df2ef2", "main_queue": True},   # 2026-11-24
+    "dotfiles": {"github": "cartwmic/dotfiles", "workflow": "ci.yml", "since": "c666fb34ef3f24c34cb1b6ab7b79334c09df2ef2", "main_queue": True,   # 2026-11-24
+                 "handles_labels": ("flaky test", "bug")},
     "loop-engine": {"github": "cartwmic/loop-engine", "workflow": "ci.yml", "since": "2995bb8e774f0b8d21c9e825e243f755fe3fc2f0"},   # 2026-11-23
     "agent-kit": {"github": "cartwmic/agent-kit", "workflow": "unit.yml", "since": "9905bd2a3acefe345b8ec2401713d5b16e43ecf6"},   # 2026-11-24
     "coordinator": {"github": "cartwmic/coordinator", "journal": True},
@@ -946,6 +950,11 @@ def first_parent_walk(repo, tip, verdicts, trees=None):
 # A link line in a later commit's message: git's own revert line, or `Handles: <sha>` (the key in any case, after a bullet or an indent). Only a
 # full 40-digit sha links: a short one would clear a red or not depending on how many commits the call listed, so cold and warm would differ.
 LINK = re.compile(r"^[ \t]*(?:[-*+][ \t]+)?(?:(?i:handles:[ \t]*|this reverts commit[ \t]+))([0-9a-f]{40})(?![0-9a-f])", re.M)
+# The two halves of LINK, apart: a `Handles:` line is a person's claim, so a repo with `handles_labels` asks an issue for it; git's revert line names a
+# commit git itself wrote, so it asks none.
+HANDLES = re.compile(r"^[ \t]*(?:[-*+][ \t]+)?(?i:handles:[ \t]*)([0-9a-f]{40})(?![0-9a-f])", re.M)
+REVERT = re.compile(r"^[ \t]*(?:[-*+][ \t]+)?(?i:this reverts commit[ \t]+)([0-9a-f]{40})(?![0-9a-f])", re.M)
+ISSUE_REF = re.compile(r"(?<![\w/&])#([0-9]+)\b")   # `#N` in a commit message: `Closes #N`, `Refs #N`, or bare
 RUN_CEILING = 1000    # gh run list returns at most this many runs, whatever the filter
 COMPARE_CAP = 10000   # compare lists at most this many commits (it still says how many there are: ahead_by)
 COMMITS_PAGE = 100
@@ -1195,7 +1204,8 @@ def quicker_way(spec, reds, unfinished):
 
 def hidden_block(name, spec, reds, advice=None):
     """The lines that name the hidden reds, first in the output: a count, the quicker way if known (quicker_way), then for each red its
-    status line, the `Handles:` line to paste on a line of its own, and its rerun command."""
+    status line, the `Handles:` line to paste on a line of its own, and its rerun command; then what an issue must be for the line to count
+    (issue_rule), for a repo that asks one."""
     where = link_place(name, spec)
     lines = [f"{name}: RED  {len(reds)} unhandled red(s) on main"] + ([f"  {advice}"] if advice else [])
     for sha, rec, subject in reds:
@@ -1203,7 +1213,7 @@ def hidden_block(name, spec, reds, advice=None):
         lines.append(f"    to clear it, put this line in {where}:")
         lines.append(f"      Handles: {sha}")
         lines.append(f"    or rerun: `gh run rerun {rec.run_id} --repo {spec['github']}`")
-    return lines + ["  a short sha does not count: the gate links only the full 40-character sha"]
+    return lines + (["  " + issue_rule(spec)] if spec.get("handles_labels") else []) + ["  a short sha does not count: the gate links only the full 40-character sha"]
 
 
 def pin_files_only(names):
@@ -1308,14 +1318,48 @@ def judge_run(repo, run, wanted):
     return "good", None
 
 
-def named_reds(spec, pull):
-    """The full shas the PR names with a link line (LINK: `Handles: <sha>` or git's revert line), read where the squash merge will carry them:
-    its commit messages, or its description for a repo that squashes from the PR body. A line anywhere else would pass the gate and clear nothing."""
+def link_texts(spec, pull):
+    """The texts a squash merge will carry into main's commit message: the PR's commit messages, or its description for a repo that squashes from the PR body."""
     if spec.get("squash_body"):
-        texts = [pull["body"] or ""]
-    else:
-        texts = [f"{c['messageHeadline']}\n\n{c['messageBody']}" for c in pull["commits"]]
-    return {sha for text in texts for sha in LINK.findall(text)}
+        return [pull["body"] or ""]
+    return [f"{c['messageHeadline']}\n\n{c['messageBody']}" for c in pull["commits"]]
+
+
+def backing_issue(spec, text, sha):
+    """The number of an issue named (`#N`) in `text` that is on record for the red `sha`, or None: a real issue of the repo (not a pull request) whose
+    body holds the red's full sha, carrying one of the repo's `handles_labels`. State and comments do not matter. A 404 is not an issue; any other gh failure raises."""
+    for n in dict.fromkeys(ISSUE_REF.findall(text)):
+        issue = gh(["api", f"repos/{spec['github']}/issues/{n}"], not_found_ok=True)
+        if (issue and "pull_request" not in issue and sha in (issue.get("body") or "")
+                and {label["name"] for label in issue.get("labels") or []} & set(spec["handles_labels"])):
+            return n
+    return None
+
+
+def issue_rule(spec):
+    """The one sentence that says what an issue must be for a `Handles:` line to count, and the command to file it (for a repo with `handles_labels`)."""
+    labels = spec["handles_labels"]
+    return (f"A `Handles:` line counts when the same message also names an issue (`#N`) whose body holds the red's full sha and that carries the "
+            + " or the ".join(f"`{label}` label" for label in labels) + f"; file one with `gh issue create --repo {spec['github']} --label \"{labels[0]}\" "
+            f"--title \"<what failed>\" --body \"<run URL> <full sha>\"` (`--label {labels[-1]}` for a failure that is not intermittent)")
+
+
+def named_reds(spec, pull):
+    """(named, unbacked): the full shas the PR names with a link line (LINK: `Handles: <sha>` or git's revert line), read where the squash merge
+    will carry them (link_texts); a line anywhere else would pass the gate and clear nothing.
+
+    For a repo with `handles_labels` (dotfiles) a `Handles:` line names its red only when the same text names a backing issue (backing_issue);
+    one that does not is in `unbacked` and not in `named`. A revert line needs no issue. Pin-fix reds do not come here: judge_reds clears them first.
+    """
+    named, unbacked = set(), set()
+    for text in link_texts(spec, pull):
+        if not spec.get("handles_labels"):
+            named.update(LINK.findall(text))
+            continue
+        named.update(REVERT.findall(text))
+        for sha in set(HANDLES.findall(text)):
+            (named if backing_issue(spec, text, sha) else unbacked).add(sha)
+    return named, unbacked - named
 
 
 def red_fix_reason(name, spec, reds, pr):
@@ -1332,11 +1376,15 @@ def red_fix_reason(name, spec, reds, pr):
     repo = spec["github"]
     try:
         pull = gh(["pr", "view", str(pr), "-R", repo, "--json", "headRefOid,headRefName,commits,body"])
-        missing = [(sha, rec) for sha, rec in reds if sha not in named_reds(spec, pull)]
+        named, unbacked = named_reds(spec, pull)
+        missing = [(sha, rec) for sha, rec in reds if sha not in named]
         if missing:
             place = link_place(name, spec)
             return refuse(pr, "it does not name this red. A green run of its own is not enough: the PR must say which red it fixes. "
-                              + "; ".join(f"{rec.label} on {sha[:7]}: put `Handles: {sha}` in {place}" for sha, rec in missing)
+                              + "; ".join(f"{rec.label} on {sha[:7]}: put `Handles: {sha}` in {place}"
+                                          + (" (it has a Handles line, but its message names no issue on record for it)" if sha in unbacked else "")
+                                          for sha, rec in missing)
+                              + (". " + issue_rule(spec) if spec.get("handles_labels") else "")
                               + ". No flake ruling is recorded for this repo's runs, so a red from a flaky test holds main until it is fixed or a rerun passes.")
         wanted = red_jobs_of(repo, [rec for _, rec in reds])
         head = pull["headRefOid"]
