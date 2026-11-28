@@ -62,7 +62,7 @@ class GuardSettingsTest(unittest.TestCase):
                 once = self.modify(profile, start)
                 self.assertEqual(once["theme"], "dark")
                 self.assertIn(USER_HOOK, once["hooks"]["PreToolUse"])
-                self.assertEqual(once["hooks"]["Stop"], start["hooks"]["Stop"])
+                self.assertEqual([g for g in once["hooks"]["Stop"] if "lead_turn_end.py" not in json.dumps(g)], start["hooks"]["Stop"])   # the lead Stop group is tests/lead-turn-end's
                 self.assertEqual(guards(once), [("Bash|Monitor", COMMAND)])
                 self.assertEqual(self.modify(profile, once), once)
 

@@ -240,6 +240,14 @@ class Merge(unittest.TestCase):
         self.assertIsNotNone(message)
         self.assertIn("merge-pr.sh", message)
 
+    def test_the_playbook_advice_opens_the_pr_with_the_cli_alone_and_merges_through_the_merge_script(self):
+        """The playbook CLI no longer merges: `--pr --merge` stops with exit 1. The refusal says to open the PR with `--pr` and merge through the merge script."""
+        message = check("gh pr merge 12 --squash")
+        self.assertIn("playbook edits: open the PR with the playbook CLI's `--pr` alone", message)
+        self.assertIn("then merge it with `" + bash_rules.MERGE_PR + " PR`", message)
+        self.assertNotIn("--pr --merge", message)
+        self.assertNotIn("--red-main-fix", message)
+
     def test_a_body_file_check_does_not_satisfy_the_merge_rule(self):
         # `pr-body-check --body-file F` is the PR-body create/edit check; it never reads the PR's head runs.
         for text in ["ci-main-status --merge-gate dotfiles && pr-body-check --body-file /tmp/b && gh pr merge 5 -R cartwmic/dotfiles",
@@ -389,7 +397,7 @@ class Merge(unittest.TestCase):
 
     def test_the_gated_paths_are_not_gh_commands_the_hook_sees(self):
         for text in ["~/git/coordinator/scripts/merge-pr.sh 440",
-                     "COORDINATOR_STATE_DIR=$HOME/.local/share/coordinator node --experimental-strip-types ~/git/coordinator/src/playbook/cli.ts retire fab9b713 --pr --merge",
+                     "COORDINATOR_STATE_DIR=$HOME/.local/share/coordinator node --experimental-strip-types ~/git/coordinator/src/playbook/cli.ts retire fab9b713 --pr",
                      "loop_engine_bump.py v0.49.1", "agent_kit_bump.py v1.4.0", "gh pr view 12", "gh pr list", "echo gh pr merge 12",
                      "git merge main"]:
             with self.subTest(text=text):

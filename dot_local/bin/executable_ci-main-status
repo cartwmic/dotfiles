@@ -1185,21 +1185,26 @@ def quicker_way(spec, reds, unfinished):
 
     Only a repo whose row says "main_queue" (dotfiles: ci.yml puts every main run in one group that runs one at a time, keeping one running and
     one pending run, a newer pending run replacing the older, and a pull request's runs in a group of their own) is advised: for another repo the
-    claim is not known to hold. `unfinished` is {run id: status} of the main runs not finished. A run ahead is one that is running or queued for a
-    runner, other than the reds' own reruns; a pending run only waits for the running one, and a rerun takes its place.
-    handles: a run is ahead; a rerun starts only after it, and a pull request's run starts at once.
-    wait: no run is ahead and every red's rerun is already going or queued: asking again changes nothing, and a pull request needs a full run of its own.
-    rerun: no run is ahead, so a rerun starts now; a `Handles:` line first needs a pull request and its full run.
+    claim is not known to hold. `unfinished` is {run id: status} of the main runs not finished, read from the newest runs only; a red's own rerun
+    is judged by its own status (rec.rerun_going), which is read for that red whatever its age. A run is ahead of a rerun when it is running or
+    queued for a runner; a pending run only waits for the running one, and a rerun takes its place.
+    handles: a run is ahead (another main run, or another red's rerun that is not pending); a rerun starts only after it, and a pull request's run starts at once.
+    wait: nothing else is ahead and every red's rerun is already going or queued: asking again changes nothing, and a pull request needs a full run of its own.
+    rerun: nothing is ahead, so a rerun starts now; a `Handles:` line first needs a pull request and its full run.
     """
     if not spec.get("main_queue"):
         return None, None
-    own = {rec.run_id for rec in reds}
+    own = {rec.run_id for rec in reds if rec.rerun_going}
     if any(status != "pending" for run_id, status in unfinished.items() if run_id not in own):
-        return "handles", ("Quicker: the `Handles:` line in a pull request. A main run is going, and a rerun starts only after it ends, while the pull "
-                           "request's own run starts at once; it merges with `--merge-gate dotfiles --pr <its number>` once that run passes.")
-    if own <= set(unfinished):
+        way = "handles"
+    elif all(rec.rerun_going for rec in reds):
         return "wait", "Quicker: wait for the rerun that is already going; a pull request with the `Handles:` line needs a full run of its own first."
-    return "rerun", "Quicker: rerun it. No main run is going, so the rerun starts now; the `Handles:` line first needs a pull request and its full run."
+    elif any(unfinished.get(run_id) != "pending" for run_id in own):   # another red's rerun is going (a status we cannot see counts as going)
+        way = "handles"
+    else:
+        return "rerun", "Quicker: rerun it. No main run is going, so the rerun starts now; the `Handles:` line first needs a pull request and its full run."
+    return way, ("Quicker: the `Handles:` line in a pull request. A main run is going, and a rerun starts only after it ends, while the pull "
+                 "request's own run starts at once; it merges with `--merge-gate dotfiles --pr <its number>` once that run passes.")
 
 
 def hidden_block(name, spec, reds, advice=None):

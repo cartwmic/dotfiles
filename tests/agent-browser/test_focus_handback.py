@@ -8,9 +8,11 @@ lsappinfo, a fake open and a fake Chrome that "self-activates" (the fake lsappin
 then on); never starts a real Chrome. Set AGENT_CHROME_SCRIPT to run these against another launcher script."""
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -88,6 +90,17 @@ if os.environ.get("FAKE_OSASCRIPT_WORKS") and os.path.exists(os.environ["FAKE_FR
 BROKEN_LSAPPINFO = "#!/bin/sh\nexit 127\n"   # stands in for a missing or failing lsappinfo
 
 
+def leftovers(folder, wait=5):
+    """The processes whose command line names a path under folder, once they have had up to `wait` seconds to go."""
+    deadline = time.monotonic() + wait
+    while True:
+        out = subprocess.run(["ps", "-A", "-ww", "-o", "command="], capture_output=True, text=True, check=True).stdout
+        found = [line for line in out.splitlines() if str(folder) in line]
+        if not found or time.monotonic() > deadline:
+            return found
+        time.sleep(0.05)
+
+
 def free_port():
     import socket
     s = socket.socket()
@@ -97,7 +110,9 @@ def free_port():
     return port
 
 
-class FocusHandback(unittest.TestCase):
+class LauncherFixture(unittest.TestCase):
+    """The fake bundle, fake tools and launcher run the tests below share; no tests of its own."""
+
     def setUp(self):
         tmp = tempfile.TemporaryDirectory(prefix="agent-chrome-handback-")
         self.addCleanup(tmp.cleanup)
@@ -127,17 +142,29 @@ class FocusHandback(unittest.TestCase):
             tool.write_text(body)
             tool.chmod(0o755)
 
-    def run_script(self, self_activate=True, osascript_works=False):
+    def run_script(self, self_activate=True, osascript_works=False, focus_wait="1", timeout=60):
         env = {"PATH": str(self.bin) + os.pathsep + os.environ["PATH"], "HOME": str(self.home),
                "AGENT_CHROME_APP": str(self.bundle), "AGENT_CHROME_OS": "Darwin",
                "AGENT_CHROME_PORT": str(self.port), "AGENT_CHROME_WAIT": "10",
-               "AGENT_CHROME_FOCUS_WAIT": "1", "FAKE_ARGV": str(self.argv),
+               "AGENT_CHROME_FOCUS_WAIT": focus_wait, "FAKE_ARGV": str(self.argv),
                "FAKE_FRONT_MARKER": str(self.marker), "FAKE_CHROME_PID": str(self.chrome_pid)}
         if self_activate:
             env["FAKE_SELF_ACTIVATE"] = "1"
         if osascript_works:
             env["FAKE_OSASCRIPT_WORKS"] = "1"
-        return subprocess.run(["sh", str(SCRIPT)], env=env, capture_output=True, text=True, timeout=60)
+        # The launcher leaves the fake Chrome running, as the real one does. Everything the launcher starts stays in
+        # its process group, so killing the group when the call ends (return, timeout or Ctrl-C) leaves nothing behind.
+        # A finally, not addCleanup: unittest skips cleanups on KeyboardInterrupt.
+        with subprocess.Popen(["sh", str(SCRIPT)], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                              start_new_session=True) as proc:
+            try:
+                out, err = proc.communicate(timeout=timeout)
+            finally:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        return subprocess.CompletedProcess(proc.args, proc.returncode, out, err)
 
     def open_calls(self):
         path = Path(str(self.argv) + ".open")
@@ -158,6 +185,8 @@ class FocusHandback(unittest.TestCase):
         path = self.home / ".local/state/agent-chrome/agent-chrome.log"
         return path.read_text().splitlines() if path.exists() else []
 
+
+class FocusHandback(LauncherFixture):
     def test_steal_hands_the_front_back_to_the_recorded_instance(self):
         """The fake Chrome "activates itself" once it is up: the launcher must hand the front back to the
         app instance that was front before the launch, exactly once, through lsappinfo setfront with the
@@ -244,6 +273,42 @@ class FocusHandback(unittest.TestCase):
         self.assertEqual(len(self.open_calls()), 1)   # the launch happened
         self.assertIn("could not record the frontmost app", "\n".join(self.record()))
         self.assertNotIn("handed it back", "\n".join(self.record()))
+
+
+class NothingLeftRunning(LauncherFixture):
+    """The fake Chrome the launcher starts must not outlive the call that ran it, however the call ends."""
+
+    def test_after_a_call_that_returns(self):
+        self.install(fake_lsappinfo())
+        self.assertEqual(self.run_script().returncode, 0)
+        self.assertTrue(self.chrome_pid.exists())      # the fake Chrome did start
+        self.assertEqual(leftovers(self.root), [])
+
+    def test_after_a_call_that_times_out(self):
+        self.install(fake_lsappinfo())
+        with self.assertRaises(subprocess.TimeoutExpired):
+            self.run_script(self_activate=False, focus_wait="30", timeout=3)    # the launcher is still watching for the front
+        self.assertTrue(self.chrome_pid.exists())
+        self.assertEqual(leftovers(self.root), [])
+
+    def test_after_a_call_that_is_interrupted(self):
+        """A child Python runs the same call and is sent SIGINT once the fake Chrome is up (a fact read from its pid file)."""
+        scratch = tempfile.TemporaryDirectory(prefix="agent-chrome-leakcheck-")
+        self.addCleanup(scratch.cleanup)
+        code = ("import sys; sys.path.insert(0, %r); import test_focus_handback as t\n"
+                "case = t.LauncherFixture(); case.setUp()\n"
+                "case.install(t.fake_lsappinfo()); case.run_script(self_activate=False, focus_wait='30')\n") % str(Path(__file__).parent)
+        child = subprocess.Popen([sys.executable, "-c", code], env={**os.environ, "TMPDIR": scratch.name},
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(child.kill)
+        deadline = time.monotonic() + 30
+        while not list(Path(scratch.name).glob("agent-chrome-handback-*/chrome-pid")):
+            self.assertLess(time.monotonic(), deadline, "the fake Chrome never started")
+            self.assertIsNone(child.poll(), "the child ended before the fake Chrome started")
+            time.sleep(0.05)
+        child.send_signal(signal.SIGINT)
+        child.wait(timeout=30)
+        self.assertEqual(leftovers(scratch.name), [])
 
 
 if __name__ == "__main__":
