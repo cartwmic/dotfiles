@@ -229,6 +229,33 @@ class DotfilesApply(unittest.TestCase):
         self.assertEqual(self.log()[-1]["outcome"], "gate-error")
         r = self.apply("--contains", "not-a-sha")
         self.assertEqual(r.returncode, 2)
+        said = self.log()[-1]
+        self.assertEqual((said["outcome"], said["exit"]), ("usage", 2))  # a wrong call leaves its line too
+
+    def test_an_unknown_flag_is_wrong_usage_and_is_logged(self):
+        r = self.apply("--nonsense")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertEqual((self.log()[-1]["outcome"], self.log()[-1]["exit"]), ("usage", 2))
+        self.assertEqual(self.gate_calls(), [])
+
+    def test_leave_pending_with_the_whole_commit_is_wrong_usage(self):
+        r = self.apply("--whole-commit", "--leave-pending", "~/x")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertEqual(self.log()[-1]["outcome"], "usage")
+
+    def test_a_gate_that_could_not_read_main_is_gate_error_and_not_untested(self):
+        self.install("ci-main-status", "#!/bin/sh\necho 'dotfiles: ERROR  cannot read main: rate limited'\nexit 1\n")
+        r = self.apply("--contains", self.base, ".a")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertEqual(self.log()[-1]["outcome"], "gate-error")
+
+    def test_the_log_line_keeps_the_paths_asked_for_and_the_paths_left(self):
+        self.write("dot_a", "two\n")
+        change = self.commit("change")
+        r = self.apply("--contains", change, ".a", "--leave-pending", "~/10_mark.sh")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)  # untested: nothing tested contains it
+        said = self.log()[-1]
+        self.assertEqual((said["outcome"], said["requested"], said["left"], said["paths"]), ("untested", [".a"], ["~/10_mark.sh"], []))
 
     # --- what it applies --------------------------------------------------------------------------------------------------------------------
 
@@ -254,6 +281,26 @@ class DotfilesApply(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("+two", r.stdout)
         self.assertIn("-one", r.stdout)
+
+    def test_a_named_directory_stands_for_the_pending_files_under_it(self):
+        (self.author / "dot_dir").mkdir()
+        self.write("dot_dir/one", "new\n")
+        self.write("dot_dir/two", "new\n")
+        change = self.commit("a directory of files")
+        self.set_green(change)
+        r = self.apply("--contains", change, ".dir")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual((self.read(".dir/one"), self.read(".dir/two")), ("new\n", "new\n"))
+        self.assertEqual(self.log()[-1]["outcome"], "applied")
+
+    def test_naming_only_current_paths_while_something_else_is_pending_is_not_nothing_to_do(self):
+        self.write("dot_b", "two\n")
+        change = self.commit("change to b")
+        self.set_green(change)
+        r = self.apply("--contains", change, ".a")  # .a is current; .b, which the commit changed, is pending and was not named
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn(".b", r.stdout)
+        self.assertEqual((self.log()[-1]["outcome"], self.read(".b")), ("other-pending", "one\n"))
 
     def test_a_new_file_in_a_new_directory_brings_its_directory(self):
         (self.author / "dot_dir").mkdir()
@@ -358,6 +405,21 @@ class DotfilesApply(unittest.TestCase):
         self.assertEqual((self.checkout(), self.read(".a")), (self.base, "one\n"))
         self.assertEqual(self.log()[-1]["outcome"], "source-not-main")
 
+    def test_a_checkout_already_at_the_tested_commit_with_edits_is_not_applied_from(self):
+        self.write("dot_a", "two\n")
+        change = self.commit("change")
+        self.set_green(change)
+        subprocess.run(["git", "-C", str(self.src), "pull", "--ff-only", "-q"], check=True)
+        (self.src / "dot_a").write_text("edited in the source, untested\n")
+        r = self.apply("--contains", change, ".a")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertEqual((self.read(".a"), self.log()[-1]["outcome"]), ("one\n", "source-dirty"))
+        subprocess.run(["git", "-C", str(self.src), "checkout", "-q", "--", "dot_a"], check=True)
+        (self.src / "dot_new").write_text("a file git does not track\n")
+        r = self.apply("--contains", change, ".a")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertEqual((self.read(".a"), self.log()[-1]["outcome"]), ("one\n", "source-dirty"))
+
     def test_a_checkout_with_a_commit_of_its_own_is_not_moved(self):
         self.write("dot_a", "two\n")
         change = self.commit("change")
@@ -412,6 +474,12 @@ class DotfilesApply(unittest.TestCase):
 
     def test_it_refuses_when_the_config_runs_a_hook_on_reading_the_source(self):
         self.config(extra="hooks:\n  read-source-state:\n    pre:\n      command: \"true\"\n")
+        r = self.apply("--contains", self.base)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertEqual((self.gate_calls(), self.log()[-1]["outcome"]), ([], "hooks"))
+
+    def test_it_refuses_a_hook_that_runs_after_the_source_is_read_too(self):
+        self.config(extra="hooks:\n  read-source-state:\n    post:\n      command: \"true\"\n")
         r = self.apply("--contains", self.base)
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertEqual((self.gate_calls(), self.log()[-1]["outcome"]), ([], "hooks"))

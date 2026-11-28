@@ -511,6 +511,20 @@ class AgentKitBumpTests(unittest.TestCase):
         self.assertEqual(len([c for c in self.calls() if c.startswith("gh pr create")]), 1)
 
 
+    def test_another_merged_change_still_pending_stops_the_apply_and_nothing_of_it_is_applied(self):
+        self.world(unrelated_pending=True)
+        result = self.bump()
+        self.assert_stopped(result, "apply", "dotfiles-apply exited 1")
+        self.assertIn(".unrelated", result.stdout)  # the command lists what else is pending
+        self.assertIn("settle that first", result.stderr)
+        self.assertEqual(self.prs()[0]["state"], "MERGED")
+        self.assert_nothing_applied()
+        self.assertEqual(self.live(".unrelated"), "unrelated v1\n")  # not applied by the bump
+        self.sh("chezmoi", "--source", self.checkout, "--no-tty", "apply", "-x", "scripts", self.home / ".unrelated")  # the person settles it
+        again = self.bump()
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertEqual(json.loads(self.live(KIT_DEST + "/package.json"))["dependencies"][PACKAGE], NEW)
+
     def test_a_source_checkout_that_cannot_fast_forward_stops_before_apply_and_a_rerun_applies(self):
         self.world()
         self.sh("git", "-C", self.checkout, "commit", "-q", "--allow-empty", "-m", "local only, not pushed")
@@ -552,7 +566,7 @@ class AgentKitBumpTests(unittest.TestCase):
         """A combined PR (the Loop Engine's files with the pins): dotfiles-apply stops at the files the kit tool does not name, the person takes the whole
         tested merge once, as the message says, and the rerun finishes."""
         first = self.first_run = self.bump(NEW, "--pr", "7")
-        self.assert_stopped(first, "apply", "a combined bump")
+        self.assert_stopped(first, "apply", "If this is a combined bump")
         self.assertIn("--whole-commit", first.stderr)
         tip = self.sh("git", "--git-dir", self.origin, "rev-parse", "refs/heads/main").strip()
         taken = subprocess.run(["dotfiles-apply", "--contains", tip, "--whole-commit"], env=self.env(), capture_output=True, text=True, timeout=300)

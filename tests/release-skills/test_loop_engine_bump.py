@@ -719,6 +719,17 @@ class BumpTests(Fixture):
         self.assertEqual(self.sh("git", "-C", self.checkout, "status", "--porcelain"), "")
         self.assertIn("moved the source checkout", result.stdout)  # dotfiles-apply moved it, to the tested commit
 
+    def test_d3_another_merged_change_still_pending_stops_the_apply_and_nothing_of_it_is_applied(self):
+        self.world(unrelated_pending=True)
+        result = self.bump()
+        self.assert_stopped(result, "apply", "dotfiles-apply exited 1")
+        self.assertIn(".unrelated", result.stdout)
+        self.assertIn("settle that first", result.stderr)
+        self.assertEqual(self.live(".unrelated"), "unrelated v1\n")  # not applied by the bump
+        self.sh("chezmoi", "--source", self.checkout, "--no-tty", "apply", "-x", "scripts", self.home / ".unrelated")  # the person settles it
+        again = self.bump()
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+
     def test_d3_a_source_checkout_that_cannot_fast_forward_stops_before_apply_and_a_rerun_applies(self):
         self.world()
         self.sh("git", "-C", self.checkout, "commit", "-q", "--allow-empty", "-m", "local only, not pushed")
