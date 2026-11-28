@@ -5,6 +5,8 @@ name: CI
 # chezmoi and mise come from scripts/ci-install-tool.sh (pinned release file, retried, sha256 in scripts/ci-tool-pins.txt), not from the tools' install-script sites.
 # Not run here: *proof.py / journey scripts that drive a real Pi or phone, and
 # anything needing 1Password or other secrets (tests/native-mcp, tests/standing-reminder, ...).
+# Every test file (test_*.py, *_test.py, *.test.ts/mjs/js, *.spec.*) is run by this workflow or scripts/ci-linux.sh, or named with its reason in
+# scripts/ci-not-run.txt; tests/ci-coverage (scripts/check-ci-coverage.py) fails on one that is neither.
 #
 # Every run (pull request, push to main, and workflow_dispatch to start an untested main by hand) runs `tests`, `release-pins` and
 # `mise-tests`. The macOS job has no path filter: a path list goes stale, and a filtered required check hangs as "expected".
@@ -64,7 +66,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: python3 scripts/check-test-edits.py "$BASE_SHA" "$HEAD_SHA"
-      - name: "Linux checks: scripts/ci-linux.sh (six node tests, then every Linux Python suite via scripts/ci-par.py)"
+      - name: "Linux checks: scripts/ci-linux.sh (the node tests, then every Linux Python suite via scripts/ci-par.py)"
         run: scripts/ci-linux.sh
       # A pull request that changes what a Python script does needs a test that notices each changed hunk (dotfiles#641: two fix
       # commits added tests, none for the loop rule they rewrote, and review round 2 found the regression there). It undoes each hunk

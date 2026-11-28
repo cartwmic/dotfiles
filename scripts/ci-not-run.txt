@@ -1,0 +1,14 @@
+# Test files CI does not run, one per line: PATH: reason. PATH is a file, or a folder that covers every test file under it.
+# The check is scripts/check-ci-coverage.py (suite: tests/ci-coverage, run by scripts/ci-linux.sh). It fails on a test file that neither
+# scripts/ci-linux.sh nor .github/workflows/ci.yml runs and that is not named here, and on an entry that names nothing, names a file CI does
+# run, or has no reason. Prefer running a test to listing it: list one only when the CI machines cannot run it, and say why.
+dot_pi/private_agent/extensions/auto-compact/index.test.ts: imports bun:test and the runner has no bun (issue 982)
+dot_pi/private_agent/extensions/goal/helpers.test.ts: imports bun:test and the runner has no bun (issue 982)
+dot_pi/private_agent/extensions/claude-compat-guard/hub-key.test.mjs: imports the Pi SDK from the global node_modules, which the runner lacks (issue 982)
+dot_pi/private_agent/extensions/claude-compat-guard/shared-auth.test.mjs: imports the Pi SDK from the global node_modules, which the runner lacks (issue 982)
+dot_pi/private_agent/extensions/learnings-monitor/review-ui.test.mjs: imports the Pi SDK from the global node_modules, which the runner lacks (issue 982)
+dot_pi/private_agent/extensions/learnings-monitor/runtime.test.mjs: loads the extension through the installed Pi SDK, which the runner lacks (issue 982)
+dot_pi/private_agent/extensions/learnings-monitor/worker.test.mjs: imports the Pi SDK from the global node_modules, which the runner lacks (issue 982)
+dot_pi/private_agent/extensions/standing-reminder/index.test.ts: imports the Pi SDK from the global node_modules, which the runner lacks (issue 982)
+tests/pi-patches/apply_pi_installed.test.mjs: skips itself unless Pi 1.5.0 is installed from the network and a helper path is given (see its header)
+dot_local/share/agent-alert/tests: builds a deployed copy with `chezmoi archive`, which fails on the runner for want of chezmoi profile data (issue 988)
