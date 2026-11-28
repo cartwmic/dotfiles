@@ -111,15 +111,22 @@ class Fixture(unittest.TestCase):
         # package versions are out of order and include non-release names: the highest X.Y.Z wins, compared as integers
         self.state = {"le_tag": "v0.49.0", "ak_tags": ["0.9.0", "0.10.0", "0.49.0", "0.48.1", "nightly", "0.50.0-rc1"]}
 
-    def run_script(self, *args, cwd=None, **state):
+    def run_script(self, *args, cwd=None, extra_env=None, **state):
+        extra_env = extra_env or {}
         if (self.dir / "state.json").exists():  # what the fake gh kept from the earlier runs of this test
             self.state.update({k: v for k, v in self.after().items() if k in ("issues", "labels", "calls")})
         self.state.update(state)
         (self.dir / "state.json").write_text(json.dumps(self.state))
-        env = {**os.environ, "PATH": "%s:%s" % (self.dir / "bin", os.environ["PATH"]),
-               "FAKE_GH_STATE": str(self.dir / "state.json")}
+        env = {k: v for k, v in os.environ.items() if k not in ("GITHUB_REF", "XDG_STATE_HOME")}   # CI sets GITHUB_REF for the suite itself
+        env.update(PATH="%s:%s" % (self.dir / "bin", os.environ["PATH"]), FAKE_GH_STATE=str(self.dir / "state.json"),
+                   XDG_STATE_HOME=str(self.dir / "xdg"), **extra_env)
         return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True, env=env,
                               cwd=cwd, timeout=60)
+
+    def log_records(self):
+        """The JSON lines the check appended to its log under XDG_STATE_HOME."""
+        path = self.dir / "xdg/check-release-pins/log.jsonl"
+        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
     def after(self):
         """The fake gh's state after the last run: the issues it holds and the calls it saw."""
@@ -129,11 +136,11 @@ class Fixture(unittest.TestCase):
 class MainModeTests(Fixture):
     """No --base: a push or manual run on main. A lagging pin never fails it; it opens, updates or closes the one issue."""
 
-    def run_check(self, mise_versions=None, kit="0.49.0", **state):
+    def run_check(self, mise_versions=None, kit="0.49.0", extra_env=None, **state):
         (self.dir / "mise.toml").write_text(mise(mise_versions or {}))
         (self.dir / "package.json").write_text(kit_package(kit))
         return self.run_script("--mise-config", str(self.dir / "mise.toml"),
-                               "--agent-kit-package", str(self.dir / "package.json"), **state)
+                               "--agent-kit-package", str(self.dir / "package.json"), extra_env=extra_env, **state)
 
     def open_issues(self):
         return [i for i in self.after().get("issues", []) if i["open"]]
@@ -249,6 +256,33 @@ class MainModeTests(Fixture):
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("cannot read the open pin-lag issues", result.stdout)
 
+    def test_a_run_on_main_acts_and_a_run_on_another_branch_changes_nothing(self):
+        result = self.run_check({"loop-engine": "0.48.1"}, extra_env={"GITHUB_REF": "refs/heads/main"})
+        self.assertEqual(len(self.open_issues()), 1, result.stdout)
+        for ref in ("refs/heads/loop-engine-v0.70.0", "refs/pull/12/merge", "refs/tags/v1"):
+            with self.subTest(ref=ref):
+                result = self.run_check(extra_env={"GITHUB_REF": ref})   # every pin matches: on main this would close the issue
+                self.assertEqual((result.returncode, result.stderr), (0, ""), result.stdout)
+                self.assertIn("not main (%s)" % ref, result.stdout)
+                self.assertEqual(len(self.open_issues()), 1)
+                self.assertEqual(self.after()["calls"].count("issue close"), 0)
+        branch_lag = self.run_check({"loop-engine": "0.40.0"}, extra_env={"GITHUB_REF": "refs/heads/old-branch"})
+        self.assertEqual(branch_lag.returncode, 0)
+        self.assertIn("0.48.1 -> 0.49.0", self.open_issues()[0]["title"])   # a branch cut before a bump did not rewrite the issue
+
+    def test_every_run_appends_one_json_line_with_its_mode_and_issue_action(self):
+        self.run_check({"loop-engine": "0.48.1"})
+        self.run_check()
+        self.run_check(le_error="HTTP 500")
+        opened, closed, warned = self.log_records()
+        self.assertEqual((opened["mode"], opened["lagging"], opened["issue"], opened["exit"]), ("main", ["loop-engine"], "opened 1", 0))
+        self.assertEqual((closed["lagging"], closed["issue"], closed["exit"]), ([], "closed #1", 0))
+        self.assertEqual((warned["lagging"] if "lagging" in warned else None, warned["exit"], "issue" in warned), (None, 0, False))
+        for record in (opened, closed, warned):
+            self.assertRegex(record["utc"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+            self.assertEqual(record["action"], "check-release-pins")
+            self.assertIn("duration_ms", record)
+
     def test_a_pin_missing_from_the_config_stops_the_check(self):
         (self.dir / "mise.toml").write_text('gh = "latest"\n')
         (self.dir / "package.json").write_text(kit_package("0.49.0"))
@@ -357,12 +391,25 @@ class PullRequestModeTests(Fixture):
         self.assertIn("cannot read the latest loop-engine release (HTTP 401: Bad credentials)", result.stdout)
         self.assertNotIn("second line", result.stdout + result.stderr)
 
-    def test_a_pr_that_deletes_the_agent_kit_pin_file_changes_no_pin(self):
+    def test_a_pr_that_deletes_the_agent_kit_pin_file_fails_naming_the_pin(self):
         self.git("checkout", "-q", "-b", "pr", self.start)
         self.git("rm", "-q", KIT_PATH)
         self.git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "drop")
         result = self.check(self.start, self.git("rev-parse", "HEAD"))
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("agent-kit pin removed by this PR", result.stdout)
+
+    def test_a_pr_that_removes_a_pin_fails_naming_it(self):
+        head = self.branch({MISE_PATH: "\n".join(l for l in mise({}).splitlines() if not l.startswith("lean-change")) + "\n"})
+        result = self.check(self.start, head)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("lean-change pin removed by this PR", result.stdout)
+
+    def test_a_pr_run_appends_its_commits_and_changed_pins_to_the_log(self):
+        head = self.branch({MISE_PATH: mise({"loop-engine": "0.30.0"})})
+        self.check(self.start, head, le_tag="v0.49.0")
+        (record,) = self.log_records()
+        self.assertEqual((record["mode"], record["base"], record["head"], record["changed"], record["exit"]), ("pull_request", self.start, head, ["loop-engine"], 1))
 
     def test_commits_git_cannot_find_stop_the_check(self):
         result = self.check(self.start, "0" * 40)

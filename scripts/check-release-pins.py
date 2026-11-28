@@ -11,10 +11,14 @@ turns a PR red. With no pin changed it exits 0 and looks up no release. A change
 Exit 1: a changed pin is not the latest release (one line per pin). Exit 2: a release could not be read, or git could not
 resolve the two commits, so the check could not run; the message names the cause. Nothing is skipped.
 
-On main (a push or a manual run, no --base) a lagging pin does not turn the run red. The check opens one issue labelled
-`pin-lag` that names each lagging pin and its latest release, keeps it up to date, and closes it when every pin matches
-(exit 0). Exit 2 only when the issue itself could not be written. A release it cannot read is a printed warning and exit 0.
-`ci-main-status --merge-gate dotfiles` prints that issue as a `pin-lag:` line.
+On main (a push or a manual run on main, no --base) a lagging pin does not turn the run red. The check opens one issue
+labelled `pin-lag` that names each lagging pin and its latest release, keeps it up to date, and closes it when every pin
+matches (exit 0). A run on any other branch (GITHUB_REF names it) changes nothing: the issue follows main's pins only.
+Exit 2 only when the issue itself could not be written. A release it cannot read is a printed warning and exit 0. A pin missing
+from a pin file stops the run with exit 1 (nothing is left to compare).
+
+Every run appends one JSON line to $XDG_STATE_HOME/check-release-pins/log.jsonl (default ~/.local/state): the UTC time, mode,
+commits, the pins it judged or found lagging, the issue action, the exit and the duration. CI keeps it as a workflow artifact.
 
 cartwmic/agent-kit is private and ships as a GitHub Packages npm package, so its tags are not readable with the
 workflow's token (HTTP 404). The check reads the package's published versions instead, the same source the kit installs
@@ -24,9 +28,12 @@ issue needs `issues: write`.
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,6 +43,7 @@ DOTFILES = "cartwmic/dotfiles"
 LOOP_ENGINE_TOOLS = ("loop-engine", "lean-change", "policy-document", "bookends-check")
 SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 LAG_LABEL = "pin-lag"
+RECORD = {}  # what this run did, for its log line
 
 
 def run(*command):
@@ -112,14 +120,15 @@ def pins_at(rev):
 
 
 def changed_pins(base, head):
-    """({name: version} that --head sets differently from the merge base, short merge base), or raises ValueError."""
+    """({name: version} that --head sets differently from the merge base, [pins it removes], short merge base), or raises ValueError."""
     merge_base, error = run("git", "merge-base", base, head)
     if error:
         raise ValueError("cannot find the merge base of %s and %s (%s); the checkout needs the full history"
                          % (base[:12], head[:12], error))
     merge_base = merge_base.strip()
     before, after = pins_at(merge_base), pins_at(head)
-    return {name: version for name, version in after.items() if before.get(name) != version}, merge_base[:12]
+    changed = {name: version for name, version in after.items() if before.get(name) != version}
+    return changed, sorted(name for name in before if name not in after), merge_base[:12]
 
 
 def latest_release(name):
@@ -134,15 +143,17 @@ def bump_hint(name, latest):
 
 
 def judge_pull_request(base, head):
+    RECORD.update(mode="pull_request", base=base, head=head)
     try:
-        changed, merge_base = changed_pins(base, head)
+        changed, removed, merge_base = changed_pins(base, head)
     except ValueError as error:
         print(error)
         return 2
-    if not changed:
+    RECORD.update(changed=sorted(changed), removed=removed)
+    lines, failed = ["%s pin removed by this PR; a pin file without it cannot be checked" % name for name in removed], bool(removed)
+    if not changed and not removed:
         print("OK: this PR changes no pin (compared with the merge base %s), so no release was looked up" % merge_base)
         return 0
-    lines, failed = [], False
     for name, version in changed.items():
         latest, error = latest_release(name)
         if error:
@@ -193,17 +204,20 @@ def sync_lag_issue(lagging):
             if error:
                 return "cannot close issue #%d (%s)" % (issue["number"], error)
             print("closed pin-lag issue #%d" % issue["number"])
+            RECORD["issue"] = "closed #%d" % issue["number"]
         return None
     title, body = lag_text(lagging)
     if issues:
         current = issues[0]
         if (current["title"], current["body"]) == (title, body):
             print("pin-lag issue #%d is up to date" % current["number"])
+            RECORD["issue"] = "unchanged #%d" % current["number"]
             return None
         _out, error = gh("issue", "edit", str(current["number"]), "--repo", DOTFILES, "--title", title, "--body", body)
         if error:
             return "cannot update issue #%d (%s)" % (current["number"], error)
         print("updated pin-lag issue #%d" % current["number"])
+        RECORD["issue"] = "updated #%d" % current["number"]
         return None
     _out, error = gh("label", "create", LAG_LABEL, "--repo", DOTFILES, "--force", "--color", "FBCA04",
                      "--description", "A Loop Engine or agent-kit pin lags its latest release")
@@ -213,10 +227,16 @@ def sync_lag_issue(lagging):
     if error:
         return "cannot open the pin-lag issue (%s)" % error
     print("opened pin-lag issue %s" % out.strip())
+    RECORD["issue"] = "opened " + out.strip().rsplit("/", 1)[-1]
     return None
 
 
 def judge_main(pins):
+    ref = os.environ.get("GITHUB_REF", "")
+    RECORD.update(mode="main", ref=ref)
+    if ref and ref != "refs/heads/main":
+        print("not main (%s): the pin-lag issue follows main's pins only, so nothing was checked or changed" % ref)
+        return 0
     le_latest, error = latest_loop_engine()
     if error:
         print("warning: cannot read the latest cartwmic/loop-engine release (%s); the release pins were not checked" % error)
@@ -229,6 +249,7 @@ def judge_main(pins):
         return 0
     lagging = {name: (version, kit_latest if name == "agent-kit" else le_latest) for name, version in pins.items()
                if version != (kit_latest if name == "agent-kit" else le_latest)}
+    RECORD["lagging"] = sorted(lagging)
     if lagging:
         print("\n".join("%s pin %s lags the latest release %s" % (name, pinned, latest)
                         for name, (pinned, latest) in lagging.items()))
@@ -241,7 +262,20 @@ def judge_main(pins):
     return 0
 
 
+def write_log(code, began):
+    path = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "check-release-pins" / "log.jsonl"
+    record = {"utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "action": "check-release-pins", **RECORD,
+              "exit": code, "duration_ms": round((time.monotonic() - began) * 1000)}
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, sort_keys=True) + "\n")
+    except OSError as error:
+        print("cannot write the run log %s (%s)" % (path, error))
+
+
 def main():
+    began = time.monotonic()
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--base", help="a pull request's base commit; with --head, judge only the pins the PR changes")
     parser.add_argument("--head", help="a pull request's head commit")
@@ -250,9 +284,9 @@ def main():
     args = parser.parse_args()
     if bool(args.base) != bool(args.head):
         parser.error("--base and --head go together")
-    if args.base:
-        return judge_pull_request(args.base, args.head)
-    return judge_main(local_pins(args.mise_config, args.agent_kit_package))
+    code = judge_pull_request(args.base, args.head) if args.base else judge_main(local_pins(args.mise_config, args.agent_kit_package))
+    write_log(code, began)
+    return code
 
 
 if __name__ == "__main__":
