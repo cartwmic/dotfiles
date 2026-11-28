@@ -1474,6 +1474,71 @@ class NoRunnerCancel(Fixture):
         self.assertNotIn("UNTESTED", out)
 
 
+def lag_issue(title, ago):
+    """What `gh issue list --json title,createdAt,url` prints for the one open pin-lag issue, opened `ago` ago."""
+    made = datetime.datetime.now(datetime.timezone.utc) - ago
+    return json.dumps([{"title": title, "createdAt": made.strftime("%Y-%m-%dT%H:%M:%SZ"), "url": "https://github.com/cartwmic/dotfiles/issues/1019"}])
+
+
+class PinLagLine(Fixture):
+    """--merge-gate dotfiles prints one `pin-lag:` warning while the pin-lag issue is open, and never changes the exit code."""
+    TITLE = "Pin lag: loop-engine 0.70.0 -> 0.72.2, agent-kit 0.85.0 -> 0.86.0"
+
+    def lines(self, out):
+        return [line for line in out.splitlines() if line.startswith("pin-lag:")]
+
+    def test_an_open_issue_prints_one_line_naming_the_pins_the_age_and_the_issue_and_the_exit_stays_0(self):
+        self.dotfiles_runs([run(1, self.c3, "success")])
+        self.reply = {"issue list": lag_issue(self.TITLE, datetime.timedelta(hours=3, minutes=12, seconds=30))}
+        rc, out = self.status("--merge-gate", "dotfiles")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.lines(out), ["pin-lag: loop-engine 0.70.0 -> 0.72.2, agent-kit 0.85.0 -> 0.86.0, open 3h 12m (https://github.com/cartwmic/dotfiles/issues/1019)"])
+        self.assertIn("GREEN", out)
+        self.assertIn("--label pin-lag --state open", self.log.read_text())
+
+    def test_the_age_reads_in_minutes_hours_and_days(self):
+        self.dotfiles_runs([run(1, self.c3, "success")])
+        for ago, want in ((datetime.timedelta(minutes=45, seconds=20), "open 45m "), (datetime.timedelta(hours=26, minutes=5, seconds=20), "open 26h 5m "),
+                          (datetime.timedelta(days=3, hours=4, seconds=20), "open 3d 4h ")):
+            with self.subTest(ago=ago):
+                self.reply = {"issue list": lag_issue(self.TITLE, ago)}
+                self.assertIn(want, self.status("--merge-gate", "dotfiles")[1])
+
+    def test_a_red_main_still_refuses_and_still_shows_the_lag(self):
+        self.dotfiles_runs([run(2, self.c3, "failure", age=5), run(1, self.c2, "success", age=1)])
+        self.reply = {"issue list": lag_issue(self.TITLE, datetime.timedelta(hours=1, seconds=30))}
+        rc, out = self.status("--merge-gate", "dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("RED", out)
+        self.assertEqual(len(self.lines(out)), 1)
+
+    def test_no_open_issue_prints_no_line(self):
+        self.dotfiles_runs([run(1, self.c3, "success")])
+        self.reply = {"issue list": "[]"}
+        rc, out = self.status("--merge-gate", "dotfiles")
+        self.assertEqual((rc, self.lines(out)), (0, []))
+
+    def test_an_unreadable_issue_list_prints_no_line_and_changes_no_exit_code(self):
+        self.dotfiles_runs([run(1, self.c3, "success")])
+        for broken in ({"fail_path": {"issue list": "HTTP 403: API rate limit exceeded"}}, {"reply": {"issue list": "not json"}},
+                       {"reply": {"issue list": json.dumps([{"title": "Pin lag: x"}])}}, {"reply": {"issue list": json.dumps({"a": 1})}}):
+            with self.subTest(broken=broken):
+                self.fail_path, self.reply = broken.get("fail_path", {}), broken.get("reply", {})
+                rc, out = self.status("--merge-gate", "dotfiles")
+                self.assertEqual((rc, self.lines(out)), (0, []), out)
+                self.assertIn("GREEN", out)
+
+    def test_only_the_merge_gate_of_dotfiles_reads_the_issue(self):
+        self.runs = {"cartwmic/dotfiles|ci.yml": [run(1, self.c3, "success")], "cartwmic/loop-engine|ci.yml": [run(1, self.c3, "success")]}
+        self.reply = {"issue list": lag_issue(self.TITLE, datetime.timedelta(hours=1))}
+        for args in (("dotfiles",), ("--tip", "dotfiles"), ("--merge-gate", "loop-engine")):
+            with self.subTest(args=args):
+                rc, out = self.status(*args)
+                self.assertEqual(self.lines(out), [], out)
+        self.assertNotIn("issue list", self.log.read_text())
+        self.assertEqual(len(self.lines(self.status("--all", "--merge-gate")[1])), 1)
+
+
 class PinFixCopiesMatchTheirSources(unittest.TestCase):
     """The exception copies the pin step's name and the bump scripts' file lists; they must not drift apart."""
 
