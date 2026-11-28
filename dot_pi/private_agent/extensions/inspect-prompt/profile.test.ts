@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 const sourceDir = fileURLToPath(new URL("../../../../", import.meta.url));
+const sourceTree = path.join(sourceDir, "tests/support/source_tree.py");
 const settingsTemplate = path.join(sourceDir, ".chezmoitemplates/pi_settings_desired");
 const inspectPromptTarget = ".pi/agent/extensions/inspect-prompt";
 const desktopProfiles = ["personal", "axon-work-computer"];
@@ -59,9 +60,10 @@ test("desktop profiles render regular mode and include inspect-prompt without ap
 			const settings = JSON.parse(renderedSettings) as { tuiMode?: unknown };
 			assert.equal(settings.tuiMode, "regular", `${profile} should select regular mode`);
 
+			// `managed` reads every external archive; the copy in tests/support/source_tree.py points them at local files, so no GitHub 503 fails this.
 			const managedTargets = execFileSync(
-				"chezmoi",
-				[...chezmoiArgs, "managed", "--path-style", "relative"],
+				"python3",
+				[sourceTree, ...chezmoiArgs.map((arg) => (arg === sourceDir ? "{source}" : arg)), "managed", "--path-style", "relative"],
 				{ encoding: "utf8" },
 			)
 				.trim()

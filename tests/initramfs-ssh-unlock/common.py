@@ -3,10 +3,13 @@ import os
 import re
 import stat
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+import source_tree  # noqa: E402  (the repo's source with its archive URLs pointed at local stand-ins: chezmoi downloads nothing)
 STAGE_SRC = ROOT / "dot_local" / "share" / "initramfs-ssh-unlock"
 HOOK = STAGE_SRC / "install" / "sd-ssh-unlock"
 DROPIN = STAGE_SRC / "mkinitcpio.conf.d" / "zz-ssh-unlock.conf"
@@ -31,9 +34,9 @@ def chezmoi_config(tmp: Path, profile: str) -> Path:
 def chezmoi(tmp: Path, profile: str, *args: str, stdin: str = None):
     home = tmp / f"home-{profile}"
     home.mkdir(exist_ok=True)
-    return subprocess.run(["chezmoi", "--source", str(ROOT), "--config", str(chezmoi_config(tmp, profile)), "--config-format", "yaml",
+    return subprocess.run(["chezmoi", "--source", str(source_tree.source()), "--config", str(chezmoi_config(tmp, profile)), "--config-format", "yaml",
                            "--destination", str(home), *args], input=stdin, capture_output=True, text=True,
-                          env=dict(os.environ, HOME=str(home)), timeout=120)
+                          env=source_tree.chezmoi_env(home), timeout=120)
 
 
 def scratch_dir():

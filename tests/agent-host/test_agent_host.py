@@ -15,6 +15,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+import source_tree  # noqa: E402  (the repo's source with its archive URLs pointed at local stand-ins: chezmoi downloads nothing)
 UNITS = {".config/systemd/user/%s.%s" % (n, k) for n in ("session-cost", "agent-events") for k in ("service", "timer")}
 LOADERS = {"77": "run_onchange_after_77_agent_events_systemd.sh.tmpl", "86": "run_onchange_after_86_session_cost_systemd.sh.tmpl"}
 TIMERS = {"77": "agent-events", "86": "session-cost"}
@@ -27,8 +29,8 @@ def chezmoi(profile, verb, *args, data=None, stdin=None):
         home.mkdir()
         cfg = Path(tmp) / "chezmoi.yaml"
         cfg.write_text(json.dumps({"data": dict(data or {}, profile=profile)}))
-        return subprocess.run(["chezmoi", "--source", str(REPO), "--config", str(cfg), "--config-format", "yaml", "--destination", str(home),
-                               verb, *args], input=stdin, capture_output=True, text=True, env=dict(os.environ, HOME=str(home)), timeout=120)
+        return subprocess.run(["chezmoi", "--source", str(source_tree.source()), "--config", str(cfg), "--config-format", "yaml", "--destination", str(home),
+                               verb, *args], input=stdin, capture_output=True, text=True, env=source_tree.chezmoi_env(home), timeout=120)
 
 
 def managed(profile, data=None):

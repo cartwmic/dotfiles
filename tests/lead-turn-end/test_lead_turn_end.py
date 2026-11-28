@@ -17,6 +17,8 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+import source_tree  # noqa: E402  (the repo's source with its archive URLs pointed at local stand-ins: chezmoi downloads nothing)
 HOOK = ROOT / "dot_local/share/agent-harness/hooks/lead_turn_end.py"
 EXT = ROOT / "dot_pi/private_agent/extensions/lead-turn-end"
 HOME = "/home/someone"
@@ -164,7 +166,7 @@ class RenderTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             cfg = Path(tmp) / "chezmoi.yaml"
             cfg.write_text("{}\n")
-            return subprocess.run(["chezmoi", "--source", str(ROOT), "--config", str(cfg), *args(tmp)], capture_output=True, text=True, timeout=300, **kw)
+            return subprocess.run(["chezmoi", "--source", str(source_tree.source()), "--config", str(cfg), *args(tmp)], capture_output=True, text=True, timeout=300, env=source_tree.chezmoi_env(tmp), **kw)
 
     def render_config(self, profile, extra=None):
         done = self.chezmoi(lambda tmp: ["execute-template", "--override-data", json.dumps(self.data(profile, extra))], input=(EXT / "config.json.tmpl").read_text())

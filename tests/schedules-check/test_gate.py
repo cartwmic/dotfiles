@@ -11,6 +11,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+import source_tree  # noqa: E402  (the repo's source with its archive URLs pointed at local stand-ins: chezmoi downloads nothing)
 PATHS = {".config/systemd/user/schedules-check.service", ".config/systemd/user/schedules-check.timer", "91_schedules_check_systemd.sh"}
 SERVICE = REPO / "dot_config/systemd/user/schedules-check.service.tmpl"
 TIMER = REPO / "dot_config/systemd/user/schedules-check.timer"
@@ -24,8 +26,8 @@ def chezmoi(profile, verb, *args, enabled=None, stdin=None):
         cfg = Path(tmp) / "chezmoi.yaml"
         extra = "" if enabled is None else "  schedulesCheck:\n    enabled: %s\n" % enabled
         cfg.write_text("data:\n  profile: %s\n%s" % (profile, extra))
-        return subprocess.run(["chezmoi", "--source", str(REPO), "--config", str(cfg), "--config-format", "yaml", "--destination", str(home),
-                               verb, *args], input=stdin, capture_output=True, text=True, env=dict(os.environ, HOME=str(home)), timeout=120)
+        return subprocess.run(["chezmoi", "--source", str(source_tree.source()), "--config", str(cfg), "--config-format", "yaml", "--destination", str(home),
+                               verb, *args], input=stdin, capture_output=True, text=True, env=source_tree.chezmoi_env(home), timeout=120)
 
 
 def managed(profile, enabled=None):

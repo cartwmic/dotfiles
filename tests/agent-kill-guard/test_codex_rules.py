@@ -5,11 +5,14 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+import source_tree  # noqa: E402  (the repo's source with its archive URLs pointed at local stand-ins: chezmoi downloads nothing)
 RULES = ROOT / "dot_codex/rules/agent-guard.rules"
 CODEX = shutil.which("codex") or next(iter(sorted(glob.glob(os.path.expanduser("~/.t3/tools/codex/*/bin/codex")))[::-1]), None)
 FORBIDDEN = ["pkill -f x", "killall x", "/usr/bin/pkill -f x", "/usr/bin/killall Dock", "/bin/pkill x", "sudo pkill x", "env pkill x",
@@ -51,8 +54,8 @@ class DeployTest(unittest.TestCase):
             home.mkdir()
             cfg = Path(tmp) / "chezmoi.yaml"
             cfg.write_text("data:\n  profile: %s\n" % profile)
-            r = subprocess.run(["chezmoi", "--source", str(ROOT), "--config", str(cfg), "--config-format", "yaml", "--destination", str(home), "managed"],
-                               capture_output=True, text=True, env=dict(os.environ, HOME=str(home)), timeout=120)
+            r = subprocess.run(["chezmoi", "--source", str(source_tree.source()), "--config", str(cfg), "--config-format", "yaml", "--destination", str(home), "managed"],
+                               capture_output=True, text=True, env=source_tree.chezmoi_env(home), timeout=120)
         self.assertEqual(r.returncode, 0, r.stderr)
         return set(r.stdout.split())
 

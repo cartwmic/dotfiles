@@ -15,6 +15,8 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+import source_tree  # noqa: E402  (the repo's source with its archive URLs pointed at local stand-ins: chezmoi downloads nothing)
 
 
 def render():
@@ -24,9 +26,9 @@ def render():
         cfg = Path(tmp) / "chezmoi.yaml"
         cfg.write_text("data:\n  profile: personal\n")
         override = json.dumps({"profile": "personal", "chezmoi": {"os": "linux"}})
-        r = subprocess.run(["chezmoi", "--source", str(REPO), "--config", str(cfg), "--config-format", "yaml",
+        r = subprocess.run(["chezmoi", "--source", str(source_tree.source()), "--config", str(cfg), "--config-format", "yaml",
                             "--destination", str(home), "--override-data", override, "cat", str(home / ".local/bin/agent-desktop")],
-                           capture_output=True, env=dict(os.environ, HOME=str(home)), timeout=120)
+                           capture_output=True, env=source_tree.chezmoi_env(home), timeout=120)
     if r.returncode:
         sys.exit("chezmoi cat failed: %s" % r.stderr.decode(errors="replace"))
     return r.stdout
