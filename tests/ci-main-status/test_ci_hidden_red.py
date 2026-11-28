@@ -187,6 +187,29 @@ class HiddenRed(base.Fixture):
                 self.assertEqual(self.log_lines()[-1]["quicker"], "wait")
                 self.assertIn("  Quicker: wait for the rerun that is already going", out)
 
+    def test_with_two_reds_one_reds_rerun_going_is_ahead_of_the_other_reds_rerun(self):
+        first, second = commit(self.src, "first red"), commit(self.src, "second red")
+        tip = commit(self.src, "tip")
+        self.attempts = {"2": {"1": {"status": "completed", "conclusion": "failure"}}}
+        self.dotfiles_runs([run(4, tip, "success", age=3), run(3, second, "failure", age=2), run(2, first, None, status="in_progress", age=1, attempt=2)])
+        rc, out = self.three_ways("--merge-gate", "dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertEqual(self.log_lines()[-1]["quicker"], "handles", out)
+        self.assertNotIn("No main run is going", out)
+        self.attempts["3"] = {"1": {"status": "completed", "conclusion": "failure"}}   # both reds are rerun: nothing else to do but wait
+        self.dotfiles_runs([run(4, tip, "success", age=3), run(3, second, None, status="pending", age=2, attempt=2), run(2, first, None, status="in_progress", age=1, attempt=2)])
+        rc, out = self.three_ways("--merge-gate", "dotfiles")
+        self.assertEqual(self.log_lines()[-1]["quicker"], "wait", out)
+
+    def test_a_red_older_than_the_runs_the_gate_lists_with_its_rerun_going_is_told_to_wait(self):
+        self.script_path = self.patched(RUN_LIMIT=2)   # 2 stands for 100: the run list holds the newest runs only, and a red can be rerun for 30 days
+        self.attempts = {"1": {"1": {"status": "completed", "conclusion": "failure"}}}
+        self.dotfiles_runs([run(3, self.c3, "success", age=3), run(2, self.c3, "success", age=2), run(1, self.c2, None, status="in_progress", age=1, attempt=2)])
+        rc, out = self.three_ways("--merge-gate", "dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertEqual(self.log_lines()[-1]["quicker"], "wait", out)
+        self.assertNotIn("No main run is going", out)
+
     def test_a_repo_whose_main_runs_are_not_known_to_queue_gets_the_line_but_no_claim_about_quickness(self):
         self.runs = {self.AK: [run(3, self.c3, None, status="in_progress", age=3), run(2, self.c3, "success", age=2), run(1, self.c2, "failure", age=1)]}
         self.jobs = {"1": red_unit_jobs()}
