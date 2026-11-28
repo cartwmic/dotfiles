@@ -2029,7 +2029,7 @@ def contains_main(argv):
             if a == "--owner-approved" or a.startswith("--owner-approved="):
                 ask = a.split("=", 1)[1] if "=" in a else (argv[i + 1] if i + 1 < len(argv) else "")
                 owner_refused(ask, None, "usage: --owner-approved ASK goes with --merge-gate OWNER/REPO --pr N and nothing else")
-        append_log(hidden_log_path(), {"ts": utc(started), "duration_ms": round((time.time() - started) * 1000), "repo": spec["github"] if spec else None,
+        append_log(hidden_log_path(), {"ts": utc(started), "duration_ms": round((time.time() - started) * 1000), "repo": (spec.get("github") or spec.get("gitea")) if spec else None,
                                        "action": "contains", "contains": " ".join(argv)[:120], "answer": None, "verdict": "USAGE", "exit": 2, "reads": READS[0]})
         return 2
     code, lines, found = green_containing(name, sha)

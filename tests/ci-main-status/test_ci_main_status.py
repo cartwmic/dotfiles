@@ -1536,7 +1536,7 @@ class ContainsGreen(Fixture):
         for args in (("--tip", "dotfiles", "--contains"), ("--tip", "dotfiles", "--contains", "xyz"), ("--tip", "dotfiles", "--contains", "abc12"),
                      ("--contains", self.c1, "dotfiles"), ("--merge-gate", "dotfiles", "--contains", self.c1),
                      ("--tip", "--all", "--contains", self.c1), ("--tip", "dotfiles", "loop-engine", "--contains", self.c1),
-                     ("--tip", "nonesuch", "--contains", self.c1), ("--tip", "coordinator", "--contains", self.c1),
+                     ("--tip", "nonesuch", "--contains", self.c1), ("--tip", "coordinator", "--contains", self.c1), ("--tip", "budget-steward", "--contains", self.c1),
                      ("--tip", "dotfiles", "--pr", "5", "--contains", self.c1), ("--tip", "dotfiles", "--contains", self.c1, "--owner-approved", "5"),
                      ("--tip", "dotfiles", "--contains", self.c1, "--owner-approved"), ("--tip", "dotfiles", f"--contains={self.c1}"),
                      ("--threads", "dotfiles", "5", "--contains", self.c1), ("--tip", "dotfiles", "--contains", self.c1, "--contains", self.c2),
@@ -1551,8 +1551,9 @@ class ContainsGreen(Fixture):
         self.env["OWNER_APPROVED_LOG"] = str(Path(self.env["CI_MAIN_STATUS_HIDDEN_LOG"]).with_name("owner.jsonl"))
         self.assertEqual(self.streams("--tip", "dotfiles", "--contains", "xyz")[0], 2)
         self.assertEqual(self.streams("--tip", "dotfiles", "--contains", self.c1, "--owner-approved", "ask-17")[0], 2)
+        self.assertEqual(self.streams("--tip", "budget-steward", "--contains", self.c1)[0], 2)   # a Gitea repo has no "github" entry
         rows = [json.loads(l) for l in Path(self.env["CI_MAIN_STATUS_HIDDEN_LOG"]).read_text().splitlines()]
-        self.assertEqual([(r["action"], r["verdict"], r["exit"], r["reads"]) for r in rows], [("contains", "USAGE", 2, 0)] * 2)
+        self.assertEqual([(r["action"], r["verdict"], r["exit"], r["reads"]) for r in rows], [("contains", "USAGE", 2, 0)] * 3)
         asked = [json.loads(l) for l in Path(self.env["OWNER_APPROVED_LOG"]).read_text().splitlines()]
         self.assertEqual([(a["ask"], a["outcome"]) for a in asked], [("ask-17", "refused")])
         self.assertFalse(self.log.exists(), "a wrong call makes no gh call")
