@@ -110,7 +110,7 @@ text fills its window instead of md-render's fixed 80 columns, so zen mode
 (`<leader>uz`, 90 columns here) sets the reading width. Zen does not dim
 Markdown buffers (source or rendered); code files keep zen's dimming. This sets fields on
 md-render's internal session, so a plugin update can break it. In a plain kitty window (0.40 or newer) headings are drawn at larger
-sizes with kitty's text sizing protocol. Inside a multiplexer such as Herdr the
+sizes with kitty's text sizing protocol. Inside a terminal multiplexer the
 terminal is not identified as kitty, so headings stay normal size and inline
 images may be missing.
 

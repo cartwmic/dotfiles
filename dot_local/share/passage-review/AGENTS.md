@@ -35,7 +35,7 @@ The Pi `/review` extension supplies input; it does not own this library.
   the ID interactively to add one. A missing clipboard command or rejected
   OSC 52 leaves the saved Markdown export and printed feedback available.
 - The Termux profile deploys its own `~/bin/passage-review` and local
-  library. Keep it independent of Pi and Herdr. The phone connects to a
+  library. Keep it independent of Pi. The phone connects to a
   desktop over SSH for remote output; no plugin executes on the phone.
 - Treat schema-1 JSON as local storage. The CLI is the supported interface;
   keep storage migrations and pending-note semantics covered by
@@ -48,7 +48,7 @@ The Pi `/review` extension supplies input; it does not own this library.
 ## Validation
 
 From the chezmoi source root, run the standalone tests and the portable review
-journey. They use a temporary library and editor; a live Pi or Herdr process
+journey. They use a temporary library and editor; a live Pi process
 is unnecessary.
 
 ```sh
