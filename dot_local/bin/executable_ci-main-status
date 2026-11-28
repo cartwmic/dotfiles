@@ -7,10 +7,18 @@ usage: ci-main-status [--tip | --merge-gate] REPO     (dotfiles, loop-engine, ag
        ci-main-status [--merge-gate] OWNER/REPO [--pr N]   (any other GitHub repo: its default branch's required checks)
        ci-main-status --merge-gate OWNER/REPO --pr N --owner-approved ASK   (Michael's answered ask for this PR; below)
        ci-main-status --threads REPO PR                (the PR's unresolved review threads, below)
+       ci-main-status --tip REPO --contains SHA        (is there a main commit with its own green run that contains SHA? below)
 
 --merge-gate is for `ci-main-status --merge-gate REPO && gh pr merge ...` (playbook fab9b713: only a red main, or a red an older push left on it that nothing handled, stops a
 merge). UNTESTED exits 0 and still prints its UNTESTED line; RED and unreadable still exit 1. Do not use `ci-main-status
 REPO; [ $? -le 2 ] && ...` instead: it lets red (1) through. It cannot be combined with --tip (a deploy needs a pass).
+
+--tip REPO --contains SHA answers one question for a deploy: is there a main commit whose own run finished green and that contains commit SHA (7 to 40
+hex digits)? Exit 0 yes, with one line `REPO: GREEN  run N passed on <short>, which contains <short>; commit <full sha>` (the full sha is the commit to
+apply); exit 1 no: no main commit has a finished green run, the newest one does not contain SHA yet (its line names it; a run may be going), or main
+could not be read; exit 2 wrong usage (anything but --tip, one GitHub table repo and a SHA; a SHA that is no commit of the repo). Plain --tip says
+UNTESTED whenever the tip itself has no finished run, which a newer push causes by cancelling the tip's run; --contains is not tied to the tip: the newest
+green main commit is the answer, and a green commit that comes after SHA contains it. Each call appends one JSON line (action "contains") to the log below.
 
 --pr N (only with --merge-gate and one REPO) is for the PR that fixes a red main (fab9b713 lets the revert or fix merge into
 a red main). A red main takes one kind of merge: the change that fixes it. Without --pr nothing changes. With it, a red main passes only under the rule for that repo; then the RED lines print as
@@ -1970,6 +1978,52 @@ def log_gitea(name, spec, action, pr, started, code, lines, rec):
     append_log(gitea_log_path(), row)
 
 
+def green_containing(name, sha):
+    """(exit code, lines, answer sha or None): is there a main commit whose own run finished green and that contains `sha`?
+
+    Main's newest green commit is the only candidate worth asking about: any older green commit is an ancestor of it and contains less.
+    A cancelled run gives its commit no verdict, so the walk passes over it to the commit below."""
+    spec = REPOS[name]
+    repo = spec["github"]
+    try:
+        verdicts, going = github_verdicts(spec)
+        walked = first_parent_walk(repo, main_tip(repo), verdicts)
+        green = walked[-1] if walked and walked[-1][2] and walked[-1][2].verdict == "pass" else None
+        if green is None:
+            return 1, [f"{name}: NO  no main commit has a finished green run" + ("; a run is going" if going else "") + f", so none contains {sha[:7]}"], None
+        found, _, rec = green
+        try:
+            status = gh(["api", f"repos/{repo}/compare/{sha}...{found}?per_page=1"])["status"]
+        except Unreadable as e:
+            if "404" in str(e) or "No common ancestor" in str(e):
+                return 2, [f"{name}: ERROR  {sha} is not a commit of {repo}"], None
+            raise
+    except Unreadable as e:
+        return 1, [f"{name}: ERROR  cannot read state: {e}"], None
+    if status in ("ahead", "identical"):
+        return 0, [f"{name}: GREEN  {rec.label} passed on {found[:7]}, which contains {sha[:7]}; commit {found}"], found
+    return 1, [f"{name}: NO  main's newest green commit {found[:7]} ({rec.label}) does not contain {sha[:7]}" + ("; a run is going" if going else "")], None
+
+
+def contains_main(argv, tip_only, merge_gate):
+    """`--tip REPO --contains SHA`: the exit code is 0 yes, 1 no, 2 wrong usage."""
+    k = argv.index("--contains")
+    sha = (argv[k + 1] if k + 1 < len(argv) else "").lower()
+    rest = argv[:k] + argv[k + 2:]
+    spec = REPOS.get(rest[0]) if len(rest) == 1 else None
+    if not (tip_only and not merge_gate and re.fullmatch(r"[0-9a-f]{7,40}", sha) and spec and "github" in spec and "journal" not in spec
+            and "gitea" not in spec and not spec.get("no_ci")):
+        print("usage: ci-main-status --tip REPO --contains SHA   (REPO: a GitHub repo of the table; SHA: 7 to 40 hex digits)", file=sys.stderr)
+        return 2
+    started = time.time()
+    code, lines, found = green_containing(rest[0], sha)
+    print("\n".join(lines))
+    append_log(hidden_log_path(), {"ts": utc(started), "duration_ms": round((time.time() - started) * 1000), "repo": spec["github"], "action": "contains",
+                                   "contains": sha, "answer": found, "verdict": "GREEN" if code == 0 else "ERROR" if code == 2 or "ERROR" in lines[0] else "NO",
+                                   "exit": code, "reads": READS[0]})
+    return code
+
+
 def describe(name, tip_only=False, pr=None, gate=False, merge_gate=False):
     """Run one repo. A state it cannot read is one ERROR line and exit 1; the other repos still run."""
     spec = REPOS[name]
@@ -2018,6 +2072,8 @@ def main(argv):
     argv = [a for a in argv if a not in ("--tip", "--merge-gate")]
     by_slug = {(v.get("github") or v["gitea"]).lower(): k for k, v in REPOS.items() if v}
     argv = [by_slug.get(a.lower(), a) for a in argv]   # every table repo's OWNER/REPO is its table entry: the any-repo path reads only GitHub's required checks, a weaker gate than the table's whole-run read
+    if "--contains" in argv:
+        return contains_main(argv, tip_only, merge_gate)
     pr = None
     if "--pr" in argv:
         k = argv.index("--pr")
