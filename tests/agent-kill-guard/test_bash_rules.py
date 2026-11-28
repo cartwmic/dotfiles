@@ -209,6 +209,8 @@ class Merge(unittest.TestCase):
                 self.assertIn("pr-record path <repo>#N", message)
                 self.assertIn("`Promises:` line", message)
                 self.assertIn("unresolved review thread", message)
+                self.assertIn("names the red with a `Handles: <full sha>` line", message)   # `--pr` passes a red main only for the PR that names it
+                self.assertNotIn("when that PR's own full-suite run", message)           # the old rule, a green run alone
 
     def test_the_merge_gate_form_with_both_checks_is_allowed_and_the_exit_code_workaround_is_not(self):
         self.assertIsNone(check("ci-main-status --merge-gate X && pr-body-check X 5 && gh pr merge 5"))
