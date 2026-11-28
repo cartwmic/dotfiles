@@ -407,9 +407,10 @@ The tier registry the owner set up on 2026-10-20 was retired on 2026-11-03 and r
 
 ## Import Loop Engine Skills From A Release Tag
 
-The six Loop Engine skill bundles (`using-loop-engine`, `coordinating-loop-engine`, `using-lean-change-provider`,
-`using-research-provider`, `using-generate-prd`, `using-policy-document-provider`) come from a release tag of
-`cartwmic/loop-engine`. `import_release_skills.py` (source:
+The four Loop Engine skill bundles (`using-loop-engine`, `coordinating-loop-engine`, `using-lean-change-provider`,
+`using-policy-document-provider`) come from a release tag of `cartwmic/loop-engine`. The tag also ships the research
+crate (the `research` program and the skills `using-research-provider` and `using-generate-prd`); dotfiles installs and
+imports none of it (`SKIPPED_BUNDLES` in the script). `import_release_skills.py` (source:
 [`dot_local/user_scripts/executable_import_release_skills.py`](../../user_scripts/executable_import_release_skills.py),
 tests: `tests/release-skills`) imports them into `canonical/skills/` and checks the result. It needs an
 authenticated `gh` and writes nothing without `--apply`.
@@ -421,7 +422,7 @@ authenticated `gh` and writes nothing without `--apply`.
 branch `loop-engine-vX.Y.Z`, waits for its checks, squash-merges it, and applies only the PR's targets here: it runs
 `chezmoi status` and `diff` on the skills tree and the mise config (the file chezmoi manages: `~/.config/mise/config.toml`, or on the agent host pod `~/.config/mise/conf.d/container.toml`, which chezmoi renders from the same pins), stops if anything there differs in a way the PR did
 not make, then applies exactly the PR's files, relinks skills with `apply_harness_config.sh skills` (skill links
-only; MCP settings are left alone), runs `mise install` for the five tools and `verify-deployed`, and checks that
+only; MCP settings are left alone), runs `mise install` for the four tools and `verify-deployed`, and checks that
 mise has each version installed and active. It reads the profile with `chezmoi dump-config` and runs every other chezmoi
 command with a copy of that config without hooks, so no configured chezmoi hook runs. It prints the PR, the merge SHA and the installed versions, and logs each step to
 `~/.local/state/loop-engine-bump/log.jsonl`. A stop names its step (orphans, red checks, drift, another profile); a
@@ -449,10 +450,12 @@ python3 "$TOOL" import vX.Y.Z --source "$REPO" --pins --apply --prune  # after y
   is the thing to record.
 - **The layout** is the one earlier imports used: `skills/<name>/**` or `crates/<crate>/skills/<name>/**` become the
   bundle; a crate's `README.md`, `docs/` and `data/` become `using-<crate>/references/`; `using-loop-engine` also takes
-  four named `docs/` files (`ROOT_REFERENCES` in the script). Importing the current tag changes nothing.
+  two named `docs/` files (`ROOT_REFERENCES` in the script). Importing the current tag changes nothing, except that
+  `coordinating-loop-engine/SKILL.md` shows as changed: dotfiles cut the two lines there that name `using-generate-prd` and the
+  research skill, which the tag still has. Loop Engine's removal of the research crate ends that difference.
 - **Orphans** are files in a bundle that the tag no longer has. Other skills in `canonical/skills/` are never touched.
   Files chezmoi would read as attributes (`dot_`, `.tmpl`, a leading dot, and so on) or drop (empty files) stop the import.
-- **`--pins`** moves the four `loop-engine`, `lean-change`, `policy-document` and `research` pins in
+- **`--pins`** moves the four `loop-engine`, `lean-change`, `policy-document` and `bookends-check` pins in
   `dot_config/mise/config.toml` to the tag's version. The `software-change` pin is gone: v0.30.0
   replaced that provider with lean-change, so new machines do not install it. Copies already installed are kept, and
   runs started on it keep the installed version they name. `mise install` adds the new version and keeps the older ones, so

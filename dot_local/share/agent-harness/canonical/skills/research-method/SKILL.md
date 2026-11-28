@@ -1,11 +1,11 @@
 ---
 name: research-method
-description: Use when asked to research a question from outside sources (web, docs, papers, pricing pages, repos) and report what was found. Covers scoping, finding sources, quoting the exact extract for each claim, when to stop, a "could not find" section, a five-claim spot check by a fresh reader, and a fan-out recipe for broad questions. Not for searching local notes (searching-with-qmd) or for durable, resumable research runs (using-research-provider).
+description: Use when asked to research a question from outside sources (web, docs, papers, pricing pages, repos) and report what was found. Covers scoping, finding sources, quoting the exact extract for each claim, when to stop, a "could not find" section, a five-claim spot check by a fresh reader, and a fan-out recipe for broad questions. Not for searching local notes (searching-with-qmd).
 ---
 
 # Research method
 
-Method only. It does not drive Loop Engine. For long, high-stakes work that needs a saved, resumable, re-auditable record, use `using-research-provider` and apply this method inside its steps.
+Method only. It does not drive Loop Engine.
 
 ## 1. Scope first
 
