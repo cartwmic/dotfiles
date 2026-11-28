@@ -1,5 +1,5 @@
 #!/bin/sh
-# Linux checks for this repo, the same command the CI `tests` job runs: the six node tests, then every
+# Linux checks for this repo, the same command the CI `tests` job runs: the node tests, then every
 # Linux Python suite through scripts/ci-par.py (tests/heavy-gate one test per process, the rest one
 # discover process per suite), then tests/kgate in four processes and tests/pi-mcp-lazy, each with its timing-bound tests kept out of the pool load.
 #
@@ -41,7 +41,31 @@ node --test tests/pi-patches/patch_failure_chain.test.mjs
 node --test tests/pi-patches/refresh_and_verify.test.mjs
 node --test tests/pi-patches/btw_pi_160.test.mjs
 # A Pi extension is TypeScript: node 22.6 or newer runs it by stripping the types (CI's setup-node step gives it).
-node --experimental-strip-types --disable-warning=ExperimentalWarning --test dot_pi/private_agent/extensions/coordinator-helper-gate/index.test.ts
+# Every test file is run here or named, with the reason it cannot run, in scripts/ci-not-run.txt: tests/ci-coverage fails on one that is neither.
+node --experimental-strip-types --disable-warning=ExperimentalWarning --test \
+  dot_pi/private_agent/extensions/anthropic-stall-retry/index.test.ts \
+  dot_pi/private_agent/extensions/axon-playbook/index.test.ts \
+  dot_pi/private_agent/extensions/bash-default-timeout/index.test.ts \
+  dot_pi/private_agent/extensions/coordinator-helper-gate/index.test.ts \
+  dot_pi/private_agent/extensions/hindsight/index.test.ts \
+  dot_pi/private_agent/extensions/inspect-prompt/index.test.ts \
+  dot_pi/private_agent/extensions/inspect-prompt/profile.test.ts \
+  dot_pi/private_agent/extensions/inspect-prompt/session.test.ts \
+  dot_pi/private_agent/extensions/lead-turn-end/index.test.ts \
+  dot_pi/private_agent/extensions/openrouter-gate/index.test.ts \
+  dot_pi/private_agent/extensions/passage-review/index.test.ts \
+  dot_pi/private_agent/extensions/pi-patch-guard/index.test.ts \
+  dot_pi/private_agent/extensions/refuse-pattern-kill/index.test.ts \
+  dot_pi/private_agent/extensions/web-search/codex.test.ts \
+  dot_pi/private_agent/extensions/web-search/config.test.ts
+# The extensions written as plain modules. The ones that need bun or the Pi SDK are in scripts/ci-not-run.txt.
+node --test \
+  dot_pi/private_agent/extensions/claude-compat-guard/guard.test.mjs \
+  dot_pi/private_agent/extensions/learnings-monitor/capture.test.mjs \
+  dot_pi/private_agent/extensions/learnings-monitor/core/index.test.mjs \
+  dot_pi/private_agent/extensions/learnings-monitor/memory.test.mjs \
+  dot_pi/private_agent/extensions/learnings-monitor/review.test.mjs \
+  dot_pi/private_agent/extensions/learnings-monitor/store.test.mjs
 
 wait "$warm_pid"
 
@@ -65,6 +89,14 @@ python3 scripts/ci-par.py \
   tests/known-limits-check \
   tests/mcp-ticket-lookup \
   'dot_local/share/session-recap:test_*.py' \
+  'dot_local/share/passage-review:test_*.py' \
+  dot_local/share/agent-harness/canonical/skills/designing-the-smallest-version/scripts \
+  dot_local/share/agent-harness/canonical/skills/minimizing-prompt-compat-edits/tests \
+  termux/tests \
+  tests/lead-turn-end \
+  tests/pr-record \
+  tests/recap-proof \
+  tests/ci-coverage \
   tests/pi-op-shim \
   tests/seed-op-connect-token \
   tests/op-token \
