@@ -1561,6 +1561,97 @@ class RunAndWake(unittest.TestCase):
         self.assertEqual([records[-1]["event"], records[-1]["result"]], ["wake", "sent"])
         self.assertEqual(len(self.t3_sends()), 1)
 
+    def stop_a_held_job(self, env):
+        """A job the agent stops itself with SIGTERM (its process group), as it does with a `gh run watch` it no longer needs. Returns the job id once its end is recorded."""
+        cmd, _ = self.held_job()
+        result = self.launch("--", *cmd, env=env)
+        job = self.job_id(result)
+        os.killpg(os.getpgid(int(result.stdout.split(", pid ")[1].split(",")[0])), signal.SIGTERM)
+        self.final_records(job, "end")
+        return job
+
+    def test_stopped_in_a_turn_and_never_read_is_dropped_as_stopped_in_turn(self):
+        # The real case (a builder that stopped its own `gh run watch` and never read it): the wake ran as a stale turn after the final report.
+        self.thread_in_a_turn()
+        job = self.stop_a_held_job(self.busy())
+        time.sleep(0.5)
+        self.assertEqual(self.t3_sends(), [], "nothing is queued behind the turn")
+        self.leave_the_turn()
+        records = self.replay(job)
+        self.assertReplay(records, "start", "end", "skip")
+        self.assertEqual([records[-1]["reason"], records[-1]["stopped"]], ["stopped-in-turn", ["SIGTERM"]])
+        self.assertGreater(records[-1]["held_s"], 0, "it was held for the turn first, so a read in the meantime still shows as `seen`")
+        self.assertEqual(self.t3_sends(), [], "and never sent")
+
+    def test_stopped_on_an_idle_or_unreadable_thread_still_sends_at_once(self):
+        for name, setup in (("idle", lambda: None), ("show fails", lambda: (self.fake / "t3_show_fail").write_text(""))):
+            with self.subTest(name):
+                (self.fake / "t3_show_fail").unlink(missing_ok=True)
+                setup()
+                before = len(self.t3_sends())
+                job = self.stop_a_held_job(self.busy())
+                records = self.replay(job)
+                self.assertReplay(records, "start", "end", "wake")
+                self.assertEqual([records[-1]["result"], len(self.t3_sends())], ["sent", before + 1])
+                self.assertNotIn("held_s", records[-1])
+
+    def swept(self, job, thread_state, *, end, output=None):
+        """A job whose watcher died after its end (what a stop that took the watcher with it leaves), found by the next call's sweep. `output`: how the owner treated its output file:
+        "read" (read after the end), "unread" (not read since before the end). Returns once the sweep call has returned: the sweep never waits for a turn."""
+        self.seed(job, None, end=end)
+        self.log.write_text(self.log.read_text().replace('"pid": 4242', f'"pid": {2**22 + 7}'))
+        self.unheld_lock(job)
+        if output:
+            path = self.state / f"run-and-wake/jobs/{job}.log"
+            path.write_text("partial output\n")
+            os.utime(path, (1.7e9, 1.7e9))  # before the seeded end, and old enough for relatime to update it on a read
+            if output == "read":
+                path.read_text()
+        (self.fake / "t3_show_busy").unlink(missing_ok=True)
+        (self.fake / "t3_show_fail").unlink(missing_ok=True)
+        if thread_state == "busy":
+            self.thread_in_a_turn()
+        elif thread_state == "unreadable":
+            (self.fake / "t3_show_fail").write_text("")
+        self.sweep_by_launching(RUN_AND_WAKE_BUSY_POLL="0.2")
+        (self.fake / "t3_show_busy").unlink(missing_ok=True)  # the call's own job waits for the turn to end, like any other
+        return [r for r in self.records_of(job) if r["event"] in ("end", "wake", "skip")]
+
+    STOPPED = {"exit": None, "signal": "SIGTERM", "stopped": ["SIGTERM"]}
+
+    def test_the_sweep_drops_a_stopped_job_when_the_thread_is_in_a_turn(self):
+        # The same real case through the sweep: the watcher died during the stop, and the next call found the builder in its turn.
+        job = "20261128T034540Z-bda53f"
+        records = self.swept(job, "busy", end=self.STOPPED, output="unread")
+        self.assertEqual([r["event"] for r in records], ["end", "skip"])
+        self.assertEqual([records[-1]["reason"], records[-1]["stopped"]], ["stopped-in-turn", ["SIGTERM"]])
+        self.assertEqual([s for s in self.t3_sends() if f"k:{job}]" in s["stdin"]], [], "no did-not-finish text reaches the turn")
+        self.assertFalse((self.state / f"run-and-wake/jobs/{job}.lock").exists(), "settled: nothing left to sweep")
+
+    def test_the_sweep_drops_a_read_job_as_seen(self):
+        self.requires_atime()
+        for state in ("idle", "busy"):
+            with self.subTest(state):
+                job = f"20261128T0345{'40' if state == 'idle' else '41'}Z-a96302"
+                records = self.swept(job, state, end={"exit": 0, "signal": None}, output="read")
+                self.assertEqual([r["event"] for r in records], ["end", "skip"])
+                self.assertEqual(records[-1]["reason"], "seen")
+                self.assertEqual([s for s in self.t3_sends() if f"k:{job}]" in s["stdin"]], [])
+
+    def test_the_sweep_still_sends_what_it_has_no_evidence_to_drop(self):
+        cases = (("not stopped, thread in a turn, output unread", "busy", {"exit": 0, "signal": None}, "unread"),
+                 ("stopped, thread idle", "idle", self.STOPPED, "unread"),
+                 ("stopped, thread state unreadable", "unreadable", self.STOPPED, None),
+                 ("stopped, nothing known of the output", "idle", self.STOPPED, None))
+        for number, (name, state, end, output) in enumerate(cases):
+            with self.subTest(name):
+                job = f"20261128T03460{number}Z-0000{number}0"
+                records = self.swept(job, state, end=end, output=output)
+                self.assertEqual([r["event"] for r in records], ["end", "wake"])
+                self.assertEqual([records[-1]["result"], records[-1]["swept"]], ["sent", True])
+                (text,) = [s["stdin"] for s in self.t3_sends() if f"k:{job}]" in s["stdin"]]
+                self.assertIn("job did NOT finish: its watcher is gone and sent no result", text)
+
     def test_the_busy_poll_setting(self):
         spec = importlib.machinery.SourceFileLoader("run_and_wake_mod", str(SCRIPT))
         mod = importlib.util.module_from_spec(importlib.util.spec_from_loader("run_and_wake_mod", spec))
