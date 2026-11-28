@@ -5,11 +5,14 @@ config, the same way tests/profiles/test_coverage.py does, and checks that the l
 """
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+import source_tree  # noqa: E402  (the repo's source with its archive URLs pointed at local stand-ins: chezmoi downloads nothing)
 LINK = ".local/bin/coordinator"
 TARGET = ".local/share/coordinator/pane-bin/coordinator"
 
@@ -24,9 +27,9 @@ class CoordinatorLinkTest(unittest.TestCase):
         self.config.write_text("data:\n  profile: personal\n")
 
     def chezmoi(self, *args):
-        r = subprocess.run(["chezmoi", "--source", str(REPO), "--config", str(self.config), "--config-format", "yaml",
+        r = subprocess.run(["chezmoi", "--source", str(source_tree.source()), "--config", str(self.config), "--config-format", "yaml",
                             "--destination", str(self.home), *args],
-                           capture_output=True, text=True, env=dict(os.environ, HOME=str(self.home)), timeout=120)
+                           capture_output=True, text=True, env=source_tree.chezmoi_env(self.home), timeout=120)
         self.assertEqual(r.returncode, 0, r.stderr)
         return r.stdout
 

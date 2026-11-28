@@ -16,6 +16,8 @@ import io
 import os
 import re
 import shutil
+import subprocess
+import sys
 import tarfile
 import tempfile
 from pathlib import Path
@@ -75,3 +77,15 @@ def chezmoi_env(home, **extra):
     env = {k: v for k, v in os.environ.items() if k.upper() not in ("NO_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY")}
     env.update(HOME=str(home), HTTPS_PROXY="http://127.0.0.1:1", HTTP_PROXY="http://127.0.0.1:1", **extra)
     return env
+
+
+def main(argv):
+    """For a test that is not Python: `python3 tests/support/source_tree.py CHEZMOI-ARGS...` runs chezmoi with `{source}` in the arguments replaced
+    by the copy, in `chezmoi_env()` with a throwaway HOME (so an empty cache), and passes its output and exit code through."""
+    with tempfile.TemporaryDirectory(prefix="dotfiles-home-") as home:
+        args = [a.replace("{source}", str(source())) for a in argv]
+        return subprocess.run(["chezmoi", *args], env=chezmoi_env(home)).returncode
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

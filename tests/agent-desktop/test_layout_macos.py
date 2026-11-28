@@ -8,11 +8,14 @@ Run: python3 -m unittest discover -s tests/agent-desktop -p 'test_layout_macos.p
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+import source_tree  # noqa: E402  (the repo's source with its archive URLs pointed at local stand-ins: chezmoi downloads nothing)
 SYSTEMS = ("linux", "darwin", "windows")
 PROFILES = ("personal", "axon-work-computer")
 LINUX_SCRIPT = ".local/bin/agent-desktop"
@@ -26,9 +29,9 @@ def managed(system, profile, *include):
         cfg = Path(tmp) / "chezmoi.yaml"
         cfg.write_text("data:\n  profile: %s\n" % profile)
         override = json.dumps({"profile": profile, "chezmoi": {"os": system}})
-        r = subprocess.run(["chezmoi", "--source", str(REPO), "--config", str(cfg), "--config-format", "yaml",
+        r = subprocess.run(["chezmoi", "--source", str(source_tree.source()), "--config", str(cfg), "--config-format", "yaml",
                             "--destination", str(home), "--override-data", override, "managed", *include],
-                           capture_output=True, text=True, env=dict(os.environ, HOME=str(home)), timeout=120)
+                           capture_output=True, text=True, env=source_tree.chezmoi_env(home), timeout=120)
     if r.returncode:
         raise AssertionError("chezmoi managed (%s, %s) failed: %s" % (system, profile, r.stderr))
     return set(r.stdout.split())

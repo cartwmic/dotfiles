@@ -17,6 +17,8 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+import source_tree  # noqa: E402  (the repo's source with its archive URLs pointed at local stand-ins: chezmoi downloads nothing)
 LEAN = {"node", "python", "gh", "jq", "chezmoi", "loop-engine", "lean-change", "bookends-check", "policy-document", "aqua:1password/cli"}
 SCRIPTS = {"05_container_tools.sh", "20_apply_harness_config.sh", "65_agent_kit_install.sh", "69_retire_research_mise_install.sh", "76_git_credential_linux.sh", "77_git_identity_linux.sh"}
 URL = "http://cliproxyapi.cliproxyapi.svc.cluster.local"
@@ -36,11 +38,11 @@ CONFIG = "data:\n  profile: %s\n  container:\n    enabled: true\n%s"
 
 
 def chezmoi(config, home, *args, path=None):
-    env = {k: v for k, v in os.environ.items() if k != "OP_SERVICE_ACCOUNT_TOKEN"}   # no 1Password token: the hub key read fails and warns, as on a CI runner
-    env["HOME"] = str(home)
+    env = source_tree.chezmoi_env(home)
+    env.pop("OP_SERVICE_ACCOUNT_TOKEN", None)   # no 1Password token: the hub key read fails and warns, as on a CI runner
     if path is not None:
         env["PATH"] = path
-    return subprocess.run(["chezmoi", "--source", str(ROOT), "--config", str(config), "--config-format", "yaml", "--destination", str(home), *args],
+    return subprocess.run(["chezmoi", "--source", str(source_tree.source()), "--config", str(config), "--config-format", "yaml", "--destination", str(home), *args],
                           capture_output=True, text=True, env=env, timeout=180)
 
 

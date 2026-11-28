@@ -8,12 +8,15 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+import source_tree  # noqa: E402  (the repo's source with its archive URLs pointed at local stand-ins: chezmoi downloads nothing)
 RETRY = "cd ~/.local/share/agent-kit && NODE_AUTH_TOKEN=$(gh auth token --user ACCOUNT) npm ci"
 SCRIPT_RETRY = "retry: chezmoi apply (this script is retried at every apply until it succeeds)"
 
@@ -32,9 +35,9 @@ class Home:
         self.config.write_text("data:\n  profile: %s\n%s" % (profile, extra))
 
     def chezmoi(self, *args, env=None):
-        cmd = ["chezmoi", "--source", str(REPO), "--config", str(self.config), "--config-format", "yaml",
+        cmd = ["chezmoi", "--source", str(source_tree.source()), "--config", str(self.config), "--config-format", "yaml",
                "--destination", str(self.home), "--persistent-state", str(self.root / "state.boltdb"), "--no-tty", *args]
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=120, env=dict(os.environ, HOME=str(self.home), **(env or {})))
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=120, env=source_tree.chezmoi_env(self.home, **(env or {})))
 
     def script_managed(self):
         return "65_agent_kit_install.sh" in self.chezmoi("managed", "--include=scripts").stdout

@@ -17,6 +17,7 @@ import unittest
 from pathlib import Path
 
 from test_qmd import REPO
+import source_tree  # noqa: E402  (test_qmd has put tests/support on the path)
 
 PLIST = REPO / "Library/LaunchAgents/local.qmd-refresh.plist.tmpl"
 LOADER = REPO / "run_onchange_after_71_qmd_refresh_launchd.sh.tmpl"
@@ -38,13 +39,13 @@ class Chezmoi:
         (self.home / "Library").mkdir(parents=True)
         self.cfg = Path(self.tmp.name) / "chezmoi.yaml"
         self.set(profile, data)
-        self.env = dict(os.environ, HOME=str(self.home))
+        self.env = source_tree.chezmoi_env(self.home)
 
     def set(self, profile="personal", data=""):
         self.cfg.write_text("data:\n  profile: %s\n%s" % (profile, "".join("  %s\n" % l for l in data.splitlines())))
 
     def run(self, *args, stdin=None, check=True):
-        r = subprocess.run(["chezmoi", "--source", str(REPO), "--config", str(self.cfg), "--config-format", "yaml",
+        r = subprocess.run(["chezmoi", "--source", str(source_tree.source()), "--config", str(self.cfg), "--config-format", "yaml",
                             "--destination", str(self.home), "--no-tty", *args],
                            input=stdin, capture_output=True, text=True, env=self.env, timeout=120)
         if check and r.returncode:

@@ -10,11 +10,14 @@ Also checks the extension lands in each profile's file list, and its test file d
 import json
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+import source_tree  # noqa: E402  (the repo's source with its archive URLs pointed at local stand-ins: chezmoi downloads nothing)
 TEMPLATE = ROOT / "dot_pi" / "private_agent" / "extensions" / "coordinator-helper-gate" / "config.json.tmpl"
 HOME = "/home/someone"
 
@@ -45,8 +48,8 @@ def managed(profile):
         config = Path(home) / "chezmoi.yaml"
         config.write_text("{}\n")
         result = subprocess.run(
-            ["chezmoi", "--source", str(ROOT), "--config", str(config), "--destination", home, "managed", "--include=files", "--path-style=relative", "--override-data", json.dumps(data(profile))],
-            capture_output=True, text=True, timeout=300,
+            ["chezmoi", "--source", str(source_tree.source()), "--config", str(config), "--destination", home, "managed", "--include=files", "--path-style=relative", "--override-data", json.dumps(data(profile))],
+            capture_output=True, text=True, timeout=300, env=source_tree.chezmoi_env(home),
         )
     assert result.returncode == 0, result.stderr
     return [line for line in result.stdout.splitlines() if line.startswith(".pi/agent/extensions/coordinator-helper-gate/")]
