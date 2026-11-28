@@ -142,6 +142,12 @@ GH_FAKE = textwrap.dedent('''\
             parents = git(src, "rev-list", "--parents", "-n", "1", sha).split()[1:]
             subject = git(src, "log", "-1", "--format=%B", sha).rstrip("\\n")
             print(json.dumps({"sha": sha, "parents": [{"sha": p} for p in parents], "commit": {"message": subject, "tree": {"sha": git(src, "rev-parse", sha + "^{tree}").strip()}, "committer": {"date": git(src, "log", "-1", "--format=%cI", sha).strip()}}}))
+        elif "/issues/" in path:   # an issue, as the REST API returns it: body, labels, and a pull_request key when the number is a PR
+            n = path.split("/issues/")[1].split("?")[0]
+            issue = (fixture.get("issues") or {}).get(repo, {}).get(n)
+            if issue is None:
+                fail("HTTP 404: no issue fixture " + n)
+            print(json.dumps(issue))
         elif "/check-runs/" in path:
             notes = fixture.get("annotations", {}).get(path.split("/check-runs/")[1].split("/")[0])
             if notes is None:
@@ -220,12 +226,19 @@ REPOS_GITHUB = {"dotfiles": "cartwmic/dotfiles", "loop-engine": "cartwmic/loop-e
                 "alert-steward": "cartwmic/alert-steward", "storycraft": "StoryCraftTW/storycraft", "retro": "cartwmic/retro"}
 
 
-def names(*shas, body=None, in_body=False):
-    """The `gh pr view --json commits,body` fields of a PR whose commit message (or, with in_body, its description) carries a `Handles:` line for each sha."""
-    text = "\n".join(f"Handles: {sha}" for sha in shas)
+def names(*shas, body=None, in_body=False, issue=50):
+    """The `gh pr view --json commits,body` fields of a PR whose commit message (or, with in_body, its description) carries a `Handles:` line for each sha,
+    and, unless `issue` is None, a `Closes #<issue>` line (the issue a repo with `handles_labels` asks for: see backing)."""
+    text = "\n".join(f"Handles: {sha}" for sha in shas) + (f"\nCloses #{issue}" if issue and shas else "")
     if in_body:
         return {"commits": [{"messageHeadline": "the fix", "messageBody": ""}], "body": text}
     return {"commits": [{"messageHeadline": "the fix", "messageBody": text}], "body": body or "a description"}
+
+
+def backing(*shas, labels=("flaky test",), body=None, pull=False):
+    """An issue as the REST API returns it, for the fake gh: its body holds each sha (or `body`), carrying `labels`; `pull` makes it a pull request."""
+    return {"body": body if body is not None else "The red run failed on " + " and ".join(shas), "state": "open",
+            "labels": [{"name": label} for label in labels], **({"pull_request": {}} if pull else {})}
 
 
 def run(run_id, sha, conclusion=None, status="completed", event="push", age=0, attempt=1, started_age=None, branch="main"):
@@ -261,6 +274,7 @@ class Fixture(unittest.TestCase):
         self.annotations = {}                        # job id (str) -> the check run's annotations
         self.prs = {}                                # PR number -> `gh pr view --json files,headRefOid`
         self.failing_pr = []                         # repos whose `gh pr view` fails
+        self.issues = {"cartwmic/dotfiles": {"50": backing(self.c3)}}   # repo -> {issue number -> issue}: #50, the one names() cites, is on record for c3
         self.journal = t / "journal.jsonl"           # absent unless a test writes it
         self.lock = t / "lock.d"
         self.log = t / "gh.log"
@@ -294,7 +308,8 @@ class Fixture(unittest.TestCase):
              "check_runs": getattr(self, "check_runs", {}), "statuses": getattr(self, "statuses", {}),
              "fail_once": getattr(self, "fail_once", []), "compare_cap": getattr(self, "compare_cap", 10000),
              "compare_drop": getattr(self, "compare_drop", []), "listing_drop": getattr(self, "listing_drop", []),
-             "fail_path": getattr(self, "fail_path", {}), "reply": getattr(self, "reply", {})}))
+             "fail_path": getattr(self, "fail_path", {}), "reply": getattr(self, "reply", {}),
+             "issues": getattr(self, "issues", {})}))
 
     def dotfiles_runs(self, runs):
         self.runs = {"cartwmic/dotfiles|ci.yml": runs}
@@ -1472,6 +1487,185 @@ class NoRunnerCancel(Fixture):
         self.assertEqual(rc, 1, out)
         self.assertIn("ERROR  cannot read state", out)
         self.assertNotIn("UNTESTED", out)
+
+
+class ContainsGreen(Fixture):
+    """--tip REPO --contains SHA: is there a main commit whose own run finished green and that contains SHA? 0 yes, 1 no, 2 wrong usage.
+
+    First-parent history, oldest to newest: c1, c2, m (a merge of a side branch into c2), c3 (the tip)."""
+
+    def ask(self, sha, repo="dotfiles"):
+        return self.streams("--tip", repo, "--contains", sha)
+
+    def test_a_cancelled_tip_with_a_later_green_commit_than_x_approves_that_commit_for_x(self):
+        self.dotfiles_runs([run(3, self.c3, "cancelled", age=3), run(2, self.m, "success", age=2), run(1, self.c1, "success", age=1)])
+        self.assertEqual(self.streams("--tip", "dotfiles")[0], 2)   # plain --tip: the tip has no finished run, so nothing is approved
+        rc, out, _ = self.ask(self.c2)
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"commit {self.m}", out)
+        self.assertIn(f"which contains {self.c2[:7]}", out)
+        self.assertEqual(self.ask(self.c3)[0], 1)   # the cancelled tip itself is not covered by any green run
+
+    def test_no_green_run_past_x_does_not_approve_x(self):
+        self.dotfiles_runs([run(2, self.c3, "cancelled", age=2), run(1, self.c2, "success", age=1)])
+        rc, out, _ = self.ask(self.m)
+        self.assertEqual(rc, 1, out)
+        self.assertIn(f"newest green commit {self.c2[:7]}", out)
+        self.assertIn(f"does not contain {self.m[:7]}", out)
+        self.assertNotIn("commit " + self.c2, out)
+
+    def test_the_green_commit_itself_counts_and_the_answer_names_its_full_sha(self):
+        self.dotfiles_runs([run(1, self.c3, "success")])
+        rc, out, _ = self.ask(self.c3[:10])
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"commit {self.c3}", out)
+
+    def test_a_red_run_on_the_tip_does_not_hide_the_older_green_commit_that_contains_x(self):
+        self.dotfiles_runs([run(2, self.c3, "failure", age=2), run(1, self.m, "success", age=1)])
+        self.assertEqual(self.ask(self.c1)[0], 0)
+        self.assertEqual(self.ask(self.c3)[0], 1)
+
+    def test_no_green_run_at_all_is_no(self):
+        self.dotfiles_runs([run(1, self.c3, "failure")])
+        rc, out, _ = self.ask(self.c1)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("no main commit has a finished green run", out)
+
+    def test_wrong_usage_is_exit_2_and_reads_nothing(self):
+        self.dotfiles_runs([run(1, self.c3, "success")])
+        for args in (("--tip", "dotfiles", "--contains"), ("--tip", "dotfiles", "--contains", "xyz"), ("--tip", "dotfiles", "--contains", "abc12"),
+                     ("--contains", self.c1, "dotfiles"), ("--merge-gate", "dotfiles", "--contains", self.c1),
+                     ("--tip", "--all", "--contains", self.c1), ("--tip", "dotfiles", "loop-engine", "--contains", self.c1),
+                     ("--tip", "nonesuch", "--contains", self.c1), ("--tip", "coordinator", "--contains", self.c1), ("--tip", "budget-steward", "--contains", self.c1),
+                     ("--tip", "dotfiles", "--pr", "5", "--contains", self.c1), ("--tip", "dotfiles", "--contains", self.c1, "--owner-approved", "5"),
+                     ("--tip", "dotfiles", "--contains", self.c1, "--owner-approved"), ("--tip", "dotfiles", f"--contains={self.c1}"),
+                     ("--threads", "dotfiles", "5", "--contains", self.c1), ("--tip", "dotfiles", "--contains", self.c1, "--contains", self.c2),
+                     ("--tip", "--tip", "dotfiles", "--contains", self.c1)):
+            with self.subTest(args=args):
+                rc, out, err = self.streams(*args)
+                self.assertEqual(rc, 2, out + err)
+                self.assertIn("usage: ci-main-status --tip REPO --contains SHA", err)
+        self.assertFalse(self.log.exists(), "a wrong call makes no gh call")
+
+    def test_a_refused_call_leaves_one_log_line_and_an_owner_ask_leaves_its_refusal(self):
+        self.env["OWNER_APPROVED_LOG"] = str(Path(self.env["CI_MAIN_STATUS_HIDDEN_LOG"]).with_name("owner.jsonl"))
+        self.assertEqual(self.streams("--tip", "dotfiles", "--contains", "xyz")[0], 2)
+        self.assertEqual(self.streams("--tip", "dotfiles", "--contains", self.c1, "--owner-approved", "ask-17")[0], 2)
+        self.assertEqual(self.streams("--tip", "budget-steward", "--contains", self.c1)[0], 2)   # a Gitea repo has no "github" entry
+        rows = [json.loads(l) for l in Path(self.env["CI_MAIN_STATUS_HIDDEN_LOG"]).read_text().splitlines()]
+        self.assertEqual([(r["action"], r["verdict"], r["exit"], r["reads"]) for r in rows], [("contains", "USAGE", 2, 0)] * 3)
+        asked = [json.loads(l) for l in Path(self.env["OWNER_APPROVED_LOG"]).read_text().splitlines()]
+        self.assertEqual([(a["ask"], a["outcome"]) for a in asked], [("ask-17", "refused")])
+        self.assertFalse(self.log.exists(), "a wrong call makes no gh call")
+
+    def test_a_rate_limit_on_the_compare_call_is_exit_1_even_when_a_sha_holds_404(self):
+        self.dotfiles_runs([run(1, self.c3, "success")])
+        self.fail_path = {"/compare/": "HTTP 403: API rate limit exceeded"}
+        for sha in (self.c1, "abc404d"):
+            with self.subTest(sha=sha):
+                rc, out, _ = self.ask(sha)
+                self.assertEqual(rc, 1, out)
+                self.assertIn("rate limit", out)
+                self.assertNotIn("is not a commit", out)
+
+    def test_a_sha_that_is_no_commit_of_the_repo_is_exit_2(self):
+        self.dotfiles_runs([run(1, self.c3, "success")])
+        self.fail_path = {"/compare/": "HTTP 404: Not Found"}
+        rc, out, _ = self.ask("deadbeef")
+        self.assertEqual(rc, 2, out)
+        self.assertIn("is not a commit of cartwmic/dotfiles", out)
+
+    def test_an_unreadable_main_is_no_with_an_error_line(self):
+        self.failing = ["cartwmic/dotfiles"]
+        rc, out, _ = self.ask(self.c1)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("ERROR  cannot read state", out)
+
+    def test_every_call_appends_one_log_line_with_the_question_and_the_answer(self):
+        self.dotfiles_runs([run(2, self.c3, "cancelled", age=2), run(1, self.m, "success", age=1)])
+        self.ask(self.c2)
+        self.ask(self.c3)
+        yes, no = [json.loads(l) for l in Path(self.env["CI_MAIN_STATUS_HIDDEN_LOG"]).read_text().splitlines()]
+        self.assertEqual((yes["action"], yes["contains"], yes["answer"], yes["exit"], yes["verdict"]), ("contains", self.c2, self.m, 0, "GREEN"))
+        self.assertEqual((no["contains"], no["answer"], no["exit"], no["verdict"]), (self.c3, None, 1, "NO"))
+
+
+def lag_issue(title, ago):
+    """What `gh issue list --json title,createdAt,url` prints for the one open pin-lag issue, opened `ago` ago."""
+    made = datetime.datetime.now(datetime.timezone.utc) - ago
+    return json.dumps([{"title": title, "createdAt": made.strftime("%Y-%m-%dT%H:%M:%SZ"), "url": "https://github.com/cartwmic/dotfiles/issues/1019"}])
+
+
+class PinLagLine(Fixture):
+    """--merge-gate dotfiles prints one `pin-lag:` warning while the pin-lag issue is open, and never changes the exit code."""
+    TITLE = "Pin lag: loop-engine 0.70.0 -> 0.72.2, agent-kit 0.85.0 -> 0.86.0"
+
+    def lines(self, out):
+        return [line for line in out.splitlines() if line.startswith("pin-lag:")]
+
+    def test_an_open_issue_prints_one_line_naming_the_pins_the_age_and_the_issue_and_the_exit_stays_0(self):
+        self.dotfiles_runs([run(1, self.c3, "success")])
+        self.reply = {"issue list": lag_issue(self.TITLE, datetime.timedelta(hours=3, minutes=12, seconds=30))}
+        rc, out = self.status("--merge-gate", "dotfiles")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.lines(out), ["pin-lag: loop-engine 0.70.0 -> 0.72.2, agent-kit 0.85.0 -> 0.86.0, open 3h 12m (https://github.com/cartwmic/dotfiles/issues/1019)"])
+        self.assertIn("GREEN", out)
+        self.assertIn("--label pin-lag --state open", self.log.read_text())
+        (record,) = [json.loads(l) for l in Path(self.env["CI_MAIN_STATUS_HIDDEN_LOG"]).read_text().splitlines()]
+        self.assertEqual(record["pin_lag"], self.lines(out)[0])   # the log keeps the warning after the terminal is gone
+
+    def test_the_log_line_of_a_call_with_no_lag_carries_a_null_pin_lag(self):
+        self.dotfiles_runs([run(1, self.c3, "success")])
+        self.reply = {"issue list": "[]"}
+        self.status("--merge-gate", "dotfiles")
+        (record,) = [json.loads(l) for l in Path(self.env["CI_MAIN_STATUS_HIDDEN_LOG"]).read_text().splitlines()]
+        self.assertIsNone(record["pin_lag"])
+        self.assertIsNone(record["pin_lag_error"])
+
+    def test_the_age_reads_in_minutes_hours_and_days(self):
+        self.dotfiles_runs([run(1, self.c3, "success")])
+        for ago, want in ((datetime.timedelta(minutes=45, seconds=20), "open 45m "), (datetime.timedelta(hours=26, minutes=5, seconds=20), "open 26h 5m "),
+                          (datetime.timedelta(days=3, hours=4, seconds=20), "open 3d 4h ")):
+            with self.subTest(ago=ago):
+                self.reply = {"issue list": lag_issue(self.TITLE, ago)}
+                self.assertIn(want, self.status("--merge-gate", "dotfiles")[1])
+
+    def test_a_red_main_still_refuses_and_still_shows_the_lag(self):
+        self.dotfiles_runs([run(2, self.c3, "failure", age=5), run(1, self.c2, "success", age=1)])
+        self.reply = {"issue list": lag_issue(self.TITLE, datetime.timedelta(hours=1, seconds=30))}
+        rc, out = self.status("--merge-gate", "dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("RED", out)
+        self.assertEqual(len(self.lines(out)), 1)
+
+    def test_no_open_issue_prints_no_line(self):
+        self.dotfiles_runs([run(1, self.c3, "success")])
+        self.reply = {"issue list": "[]"}
+        rc, out = self.status("--merge-gate", "dotfiles")
+        self.assertEqual((rc, self.lines(out)), (0, []))
+
+    def test_an_unreadable_issue_list_prints_no_line_and_changes_no_exit_code(self):
+        self.dotfiles_runs([run(1, self.c3, "success")])
+        for broken in ({"fail_path": {"issue list": "HTTP 403: API rate limit exceeded"}}, {"reply": {"issue list": "not json"}},
+                       {"reply": {"issue list": json.dumps([{"title": "Pin lag: x"}])}}, {"reply": {"issue list": json.dumps({"a": 1})}}):
+            with self.subTest(broken=broken):
+                self.fail_path, self.reply = broken.get("fail_path", {}), broken.get("reply", {})
+                rc, out = self.status("--merge-gate", "dotfiles")
+                self.assertEqual((rc, self.lines(out)), (0, []), out)
+                self.assertIn("GREEN", out)
+                last = json.loads(Path(self.env["CI_MAIN_STATUS_HIDDEN_LOG"]).read_text().splitlines()[-1])
+                self.assertIsNone(last["pin_lag"])
+                self.assertTrue(last["pin_lag_error"], "a failed read leaves its reason in the run log, unlike a read that found no issue")
+
+    def test_only_the_merge_gate_of_dotfiles_reads_the_issue(self):
+        self.runs = {"cartwmic/dotfiles|ci.yml": [run(1, self.c3, "success")], "cartwmic/loop-engine|ci.yml": [run(1, self.c3, "success")]}
+        self.reply = {"issue list": lag_issue(self.TITLE, datetime.timedelta(hours=1))}
+        for args in (("dotfiles",), ("--tip", "dotfiles"), ("--merge-gate", "loop-engine")):
+            with self.subTest(args=args):
+                rc, out = self.status(*args)
+                self.assertEqual(self.lines(out), [], out)
+        self.assertNotIn("issue list", self.log.read_text())
+        self.assertEqual(len(self.lines(self.status("--all", "--merge-gate")[1])), 1)
 
 
 class PinFixCopiesMatchTheirSources(unittest.TestCase):

@@ -5,6 +5,8 @@ name: CI
 # chezmoi and mise come from scripts/ci-install-tool.sh (pinned release file, retried, sha256 in scripts/ci-tool-pins.txt), not from the tools' install-script sites.
 # Not run here: *proof.py / journey scripts that drive a real Pi or phone, and
 # anything needing 1Password or other secrets (tests/native-mcp, tests/standing-reminder, ...).
+# Every test file (test_*.py, *_test.py, *.test.ts/mjs/js, *.spec.*) is run by this workflow or scripts/ci-linux.sh, or named with its reason in
+# scripts/ci-not-run.txt; tests/ci-coverage (scripts/check-ci-coverage.py) fails on one that is neither.
 #
 # Every run (pull request, push to main, and workflow_dispatch to start an untested main by hand) runs `tests`, `release-pins` and
 # `mise-tests`. The macOS job has no path filter: a path list goes stale, and a filtered required check hangs as "expected".
@@ -64,7 +66,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: python3 scripts/check-test-edits.py "$BASE_SHA" "$HEAD_SHA"
-      - name: "Linux checks: scripts/ci-linux.sh (six node tests, then every Linux Python suite via scripts/ci-par.py)"
+      - name: "Linux checks: scripts/ci-linux.sh (the node tests, then every Linux Python suite via scripts/ci-par.py)"
         run: scripts/ci-linux.sh
       # A pull request that changes what a Python script does needs a test that notices each changed hunk (dotfiles#641: two fix
       # commits added tests, none for the loop rule they rewrote, and review round 2 found the regression there). It undoes each hunk
@@ -88,24 +90,24 @@ jobs:
           path: ${{ runner.temp }}/state/check-untested-hunks/log.jsonl
           if-no-files-found: warn
 
-  # Its own job, so a lagging pin turns the run red without stopping `tests` from running and reporting on its own merits
-  # (2026-11-17: two releases three minutes apart each blocked the other's bump PR, and every open PR's suites never ran).
+  # Its own job, so a pin problem never stops `tests` from running and reporting on its own merits.
   # Not in scripts/ci-linux.sh: it reads GitHub through gh, and kgate pods run ci-linux.sh with no gh login.
-  # Main's run reads red while a pin lags with no open bump PR for it (ci-main-status sees the run, not one job).
-  # Branch protection requires `tests` and `mise-tests`, not this job, so a PR with a lagging pin is not blocked from merging; the red main is
-  # what stops the next merge.
+  # On a pull request it judges only the pins the PR changes (against the merge base) and fails one set to anything but the latest release.
+  # On main a lagging pin opens or updates one `pin-lag` issue and closes it when the pins match, and the run stays green; a manual run
+  # on another branch changes nothing. Branch protection requires `tests` and `mise-tests`, not this job.
   release-pins:
     runs-on: ubuntu-latest
     # A job's own permissions replace the top-level block, so this lists every scope the job uses:
-    # packages reads the agent-kit versions; pull-requests reads the open dotfiles PRs and their diffs when a pin lags.
+    # packages reads the agent-kit versions; issues writes the pin-lag issue (main runs only).
     permissions:
       contents: read
       packages: read
-      pull-requests: read
+      issues: write
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+          fetch-depth: 0 # the merge base of a pull request's base and head
       - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
@@ -113,7 +115,24 @@ jobs:
       - name: "Release pins: fail when a Loop Engine or agent-kit pin lags the latest release (playbook 7c57de5a)"
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/check-release-pins.py
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          XDG_STATE_HOME: ${{ runner.temp }}/state # the check appends its record to $XDG_STATE_HOME/check-release-pins/log.jsonl; the next step keeps it
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            python3 scripts/check-release-pins.py --base "$BASE_SHA" --head "$HEAD_SHA"
+          else
+            python3 scripts/check-release-pins.py
+          fi
+      # The runner is thrown away when the job ends, so the check's record (one JSON line per run) is kept as a workflow artifact.
+      - name: "Release pins: keep the check's record (log.jsonl) as a workflow artifact"
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: check-release-pins-log
+          path: ${{ runner.temp }}/state/check-release-pins/log.jsonl
+          if-no-files-found: warn
 
   # macOS: the kubectl task test puts /usr/bin first on PATH, and the ubuntu runner image
   # ships /usr/bin/kubectl, which makes the task skip itself.

@@ -52,20 +52,20 @@ A version mismatch between pins is not a failure: the page flags it in red.
 
 A dotfiles PR that breaks the page build is refused at merge time. `pr-body-check cartwmic/dotfiles N` (the merge form, the second step of the chain the Bash hook requires before `gh pr merge`) first runs `stack-map-merge-check cartwmic/dotfiles N`, on the agent host. No token or secret is needed in GitHub CI.
 
-How it runs: it reads the PR's head commit with `gh pr view`, fetches it into `~/git/dotfiles` (the clone is fetched into, never checked out), fetches `origin/main` of the four clones, and builds the page in a scratch folder under `~/tmp` with the PR's head standing in for dotfiles `origin/main`, using the PR's own generator. It writes nothing to `~/.local/state/stack-map` and removes the scratch folder. Each run adds one JSON line (PR, head, outcome, failure lines, duration) to `~/.local/state/stack-map-merge-check/log.jsonl`.
+How it runs: it reads the PR's head commit with `gh pr view`, fetches it into `~/git/dotfiles` (the clone is fetched into, never checked out), fetches `origin/main` of the four clones, merges the head with dotfiles `origin/main` in memory (`git merge-tree`, the same merge GitHub's own pull-request runs build), and builds the page once in a scratch folder under `~/tmp` with that merge result standing in for dotfiles `origin/main`, using the merge result's generator. A fix already on main therefore counts, and a PR that is only behind main is not blamed for it. It writes nothing to `~/.local/state/stack-map` and removes the scratch folder. Each run adds one JSON line (PR, head, outcome, failure lines, the page files the PR touched, the failing citations that name a file it changed, duration) to `~/.local/state/stack-map-merge-check/log.jsonl`.
 
 What it decides:
 
-| The PR head build | And | Result |
+| The merged build | And | Result |
 |---|---|---|
 | passes | | passes, one line with the citation count |
-| fails | the same build of `origin/main` passes | refused (exit 1), with the generator's `repo:path:line: reason` lines |
-| fails | the PR changes `docs/stack-map/`, the generator or `tests/stack-map/` | refused |
-| fails | main fails too and the PR changes none of those paths | a warning, passes: some other repository moved, not this PR |
+| fails | the PR changes `docs/stack-map/`, the generator or `tests/stack-map/` | refused (exit 1), with the generator's `repo:path:line: reason` lines |
+| fails | a failing `dotfiles:path:line` citation names a file the PR changed (edited, deleted or renamed) | refused |
+| fails | neither | a warning, passes: another repository moved, or a dotfiles file this PR did not change, not this PR |
 
-It cannot check (exit 2, which also stops the chain) when any `git` command or `gh` fails or cannot start (a fetch, the head read), the PR head moved while it ran, `~/git` lacks one of the four clones, the scratch clone fails, or the page build runs over 600 seconds. A wrong call (not `cartwmic/dotfiles` and a PR number) is also exit 2, and is logged too.
+It cannot check (exit 2, which also stops the chain) when any `git` command or `gh` fails or cannot start (a fetch, the head read), the PR head moved while it ran, the PR conflicts with main (there is no merge result: merge main into the PR first), `~/git` lacks one of the four clones, the scratch clone fails, or the page build runs over 600 seconds. A wrong call (not `cartwmic/dotfiles` and a PR number) is also exit 2, and is logged too.
 
-The fix for a refusal is the one for any run that fails (the table above): correct `content.md`, the generator, or the cited code, and push. If main has already fixed the break, update the PR's branch from main first, since the check builds the PR head as it is.
+The fix for a refusal is the one for any run that fails (the table above): correct `content.md`, the generator, or the cited code, and push. The check builds the PR as it would merge, so there is no need to merge main into a PR just to pick up a fix that is already there.
 
 ## Tests
 

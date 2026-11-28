@@ -28,7 +28,21 @@ Contract (docs/run-and-wake.md):
 - A wake that would say nothing new is not sent, and each drop is a `skip` record with its reason:
     waited     a `run-and-wake --wait JOB` run by the thread the wake is for is blocked on the job or already printed its result, so a second message would be a duplicate. A wait from any other thread just prints; the owner's wake is still sent
     cancelled  the session stopped the job itself with `kgate cancel` (kgate's end line has "cancelled": true); `kgate cancel` already printed the end line to its caller
-  Every other end, success or failure, still wakes.
+    stopped-in-turn  the job was stopped by a signal while its thread was in a turn: whoever was running when it stopped knows it ended (the record names the signals as `stopped`)
+  Every other end, success or failure, still wakes. A read of the job's output file is not evidence of any of this: any process that scans the jobs folder reads it.
+- A wake is sent when the thread can act on it, not when the job ends. T3 runs a message sent to a thread that is in the middle of a turn as a new turn after
+  that turn, and by then the agent has often handled the job: the reply to that stale wake is a new result for a delegated task and replaces its final report.
+  So the watcher asks `t3 thread show` whether the thread has an active run, and while it does, holds the wake, writes one `hold` record (with `poll_s`) and asks
+  again every RUN_AND_WAKE_BUSY_POLL seconds (default 30). That gives the owner time to run `run-and-wake --wait JOB`, which drops the wake as `waited`. When the
+  thread is idle (or `thread show` cannot say: it fails, prints nothing or prints something unreadable, and the wake goes out as it always did), the wake is
+  sent unless the owner waited. The same check runs just before a wake in a burst is sent. The held seconds are on the `wake` or `skip` record as `held_s`.
+- A stopped job is never held: it is looked at once, as the sweep does, because a stop can come with a SIGKILL a scope stop timeout later that would take the
+  watcher before it decided. If the owner waited, it is dropped as `waited`; if the thread is in a turn, as `stopped-in-turn`; otherwise (an idle thread, or one
+  whose state cannot be read) it sends at once. Known limit (decision #7791; the owner of the work has not accepted it): a job stopped by someone other than its owner while the owner's
+  thread is in a turn gives the owner no wake; each case is a `stopped-in-turn` skip, next to the job's `end` record.
+- The sweep (a watcher that died after its job ended) applies the same drop rules before it sends the did-not-finish text: `waited`, and `stopped-in-turn` (the
+  `end` record has `stopped` and one `t3 thread show` says the thread is in a turn). The sweep runs inside every run-and-wake call, so it looks once and never waits
+  for a turn. `--recover` (a job from an earlier boot) is unchanged.
 - A thread's wakes for jobs that end within RUN_AND_WAKE_COALESCE seconds (default 10; 0 turns it off) of each other are sent as one message, one line per job,
   each line the text the job would have got alone. Each merged job has its own `wake` record (`merged_with` names the others). A job that was stopped
   (a signal reached the watcher) is sent at once.
@@ -54,9 +68,10 @@ Contract (docs/run-and-wake.md):
     end    {exit, signal, duration_s, stopped?}  (stopped: signals this process forwarded to the job; recover also writes one for a job a restart left
            with no end: exit null, signal null, error "host-restarted", recovered true; a sweep writes one for a job whose watcher is gone: exit null,
            signal null, error "lost", lost true: the job's own status is not known)
-    wake   {target: t3, result: sent|failed, error?, duration_s, attempts? (when retried), recover? (sent by --recover), merged_with? (the other jobs in the same message)}
+    hold   {poll_s}                 (the job's wake is held: its thread is in a turn; one record, when the hold starts)
+    wake   {target: t3, result: sent|failed, error?, duration_s, attempts? (when retried), recover? (sent by --recover), merged_with? (the other jobs in the same message), held_s? (seconds held while the thread was in a turn)}
     read   {owner}                  (a `run-and-wake --wait` printed the job's result; owner: true when it ran in the thread the wake is for)
-    skip   {reason, detail?}
+    skip   {reason, detail?, held_s?, stopped? (the signals, for `stopped-in-turn`)}
   Older logs also hold `pane` and `session` on `start` (a herdr pane that was woken then), and `blocked` records and herdr wakes; they are still read, never written.
 """
 import fcntl
@@ -120,6 +135,21 @@ def coalesce_window():
         pass
     print(f"[{NAME}] WARN: RUN_AND_WAKE_COALESCE={setting!r} is not a number of seconds; using 10", file=sys.stderr)
     return 10.0
+
+
+def busy_poll():
+    """Seconds between asks whether a busy thread is idle yet: RUN_AND_WAKE_BUSY_POLL=<seconds>, default 30. A bad value means the default, with a warning."""
+    setting = os.environ.get("RUN_AND_WAKE_BUSY_POLL")
+    if setting is None or setting == "":
+        return 30.0
+    try:
+        poll = float(setting)
+        if poll > 0:
+            return poll
+    except ValueError:
+        pass
+    print(f"[{NAME}] WARN: RUN_AND_WAKE_BUSY_POLL={setting!r} is not a positive number of seconds; using 30", file=sys.stderr)
+    return 30.0
 
 
 def say(level, message):
@@ -187,6 +217,18 @@ def t3_unreachable(error):
     return error is not None and any(marker in error for marker in UNREACHABLE)
 
 
+def thread_in_a_turn(thread):
+    """True when `t3 thread show` says the thread has an active run. Anything else (the CLI missing, T3 down, no answer in a minute, an answer that is not
+    the thread's JSON) is False: a wake that cannot be placed is sent, as it always was."""
+    try:
+        done = subprocess.run([t3_cli(), "thread", "show", "--json", "--messages", "0", thread], capture_output=True, text=True, timeout=60)
+        if done.returncode != 0:
+            return False
+        return bool(json.loads(done.stdout)["thread"]["activeRunId"])
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+        return False
+
+
 def t3_send_when_up(thread, text, deadline):
     """Send; while no T3 server answers, try again every interval until the deadline. (error or None, attempts)."""
     interval = T3_RETRY[0]
@@ -208,12 +250,12 @@ def record_wake(job, started, error, attempts, **extra):
         record(job, "wake", target="t3", result="failed", error=error, duration_s=took, **more, **extra)
 
 
-def wake_thread(job, thread, text, stopped):
+def wake_thread(job, thread, text, stopped, **extra):
     """One wake. A job that was stopped (a shutdown, a scope stop) gets one attempt and no wait: the stop may be the host going down, and a
     watcher still waiting would hold the shutdown for the scope's stop timeout. --recover owes the wake then."""
     started = time.monotonic()
     error, attempts = t3_send_when_up(thread, text, started if stopped else started + T3_RETRY[1])
-    record_wake(job, started, error, attempts)
+    record_wake(job, started, error, attempts, **extra)
 
 
 # --- wakes that would say nothing new: dropped, or merged ---
@@ -276,6 +318,45 @@ def result_read(job):
     return os.path.exists(read_marker(job)) or waiter_alive(job)
 
 
+def settled(job):
+    """(reason, detail) when the owner already has this job's result and the wake would say nothing new, else None. Only the owner's own `--wait` counts: a read of the output
+    file proves nothing, because any process that scans the jobs folder reads it."""
+    if result_read(job):
+        return "waited", "a run-and-wake --wait delivered the result"
+    return None
+
+
+def owner_has_it(job, thread, stopped):
+    """(reason, detail) when this job's wake is dropped, decided now with one look and no wait: the owner waited for it, or a signal stopped it while its thread was in a turn
+    (whoever was running then knows it ended, and a wake would run as a stale turn). The watcher decides a stopped job with this, and the sweep every job."""
+    done = settled(job)
+    if not done and stopped and thread and thread_in_a_turn(thread):
+        return "stopped-in-turn", f"stopped by {', '.join(stopped)} while the thread was in a turn"
+    return done
+
+
+def skip_fields(held, stopped):
+    return {**held_field(held), **({"stopped": stopped} if stopped else {})}
+
+
+def hold_while_in_a_turn(job, thread):
+    """Seconds the wake waited for the thread to leave its turn, 0.0 when it was not in one. A message sent to a thread in a turn runs as a new turn
+    after it, when it is stale. One `hold` record when the wait starts."""
+    if not thread_in_a_turn(thread):
+        return 0.0
+    started = time.monotonic()
+    poll = busy_poll()
+    record(job, "hold", poll_s=poll)
+    while True:
+        time.sleep(poll)
+        if not thread_in_a_turn(thread):
+            return time.monotonic() - started
+
+
+def held_field(held):
+    return {"held_s": round(held, 1)} if held > 0 else {}
+
+
 class FlushNow(Exception):
     """A stop signal reached a watcher that was waiting for the merge window: send now, the host may be going down."""
 
@@ -284,7 +365,7 @@ def raise_flush(_signum, _frame):
     raise FlushNow()
 
 
-def wake_thread_merged(job, thread, text, window):
+def wake_thread_merged(job, thread, text, window, held):
     """Queue this job's wake for its thread and, after `window` seconds, send everything queued as one message. Whichever watcher wakes first sends the whole
     queue and writes every merged job's `wake` record; a watcher that finds its job already sent has nothing left to do. The queue lock is held across the send, so a
     job that ends while T3 is being waited for joins the next message, not a second concurrent send."""
@@ -294,7 +375,7 @@ def wake_thread_merged(job, thread, text, window):
     with open(lock, "a") as guard:
         fcntl.flock(guard, fcntl.LOCK_EX)
         with open(spool, "a", encoding="utf-8") as queue:
-            queue.write(json.dumps({"job": job, "text": text}, ensure_ascii=False) + "\n")
+            queue.write(json.dumps({"job": job, "text": text, "held": held}, ensure_ascii=False) + "\n")
     flush_now = False
     handled = [signum for signum in FORWARDED if signal.getsignal(signum) is not signal.SIG_IGN]
     for signum in handled:
@@ -317,20 +398,21 @@ def wake_thread_merged(job, thread, text, window):
             return  # a watcher that woke before us has sent it
         send = []
         for e in queued:
-            if result_read(e["job"]):
-                record(e["job"], "skip", reason="waited", detail="a run-and-wake --wait delivered the result")
+            done = settled(e["job"])
+            if done:
+                record(e["job"], "skip", reason=done[0], detail=done[1], **held_field(e.get("held") or 0))
             else:
                 send.append(e)
         if send:
             started = time.monotonic()
             error, attempts = t3_send_when_up(thread, "\n".join(e["text"] for e in send), started if flush_now else started + T3_RETRY[1])
             for e in send:
-                record_wake(e["job"], started, error, attempts, **({"merged_with": [o["job"] for o in send if o is not e]} if len(send) > 1 else {}))
+                record_wake(e["job"], started, error, attempts, **held_field(e.get("held") or 0), **({"merged_with": [o["job"] for o in send if o is not e]} if len(send) > 1 else {}))
         open(spool, "w").close()
 
 
 def deliver(job, thread, text, stopped):
-    """Send this job's wake, unless it would say nothing new (see the docstring)."""
+    """Send this job's wake once the thread can act on it, unless it would say nothing new (see the docstring)."""
     if kgate_cancelled(job):
         record(job, "skip", reason="cancelled", detail="stopped by kgate cancel, which printed its end line to the caller")
     elif result_read(job):
@@ -338,11 +420,16 @@ def deliver(job, thread, text, stopped):
     elif not thread:
         record(job, "skip", reason="no-thread", detail="no T3CODE_THREAD_ID: nothing to wake")
     else:
+        held = 0.0 if stopped else hold_while_in_a_turn(job, thread)  # a stopped job is looked at once: a scope stop's SIGKILL can follow its SIGTERM
+        done = owner_has_it(job, thread, stopped)
+        if done:
+            record(job, "skip", reason=done[0], detail=done[1], **skip_fields(held, stopped))
+            return
         window = coalesce_window()
         if stopped or window <= 0:
-            wake_thread(job, thread, text, stopped)
+            wake_thread(job, thread, text, stopped, **held_field(held))
         else:
-            wake_thread_merged(job, thread, text, window)
+            wake_thread_merged(job, thread, text, window, held)
 
 
 # --- launch ---
@@ -623,10 +710,13 @@ def lost_text(job, start):
             f"so its status is unknown. Rerun it; this is not a result. Started {start['ts']}: {what}. Partial output: {start['output']}.")
 
 
-def send_owed(job, start, text, deadline):
-    """The one wake a swept job is owed, or the reason it is not sent. True when settled, False when T3 was unreachable and the wake is still owed."""
-    if result_read(job):
-        record(job, "skip", reason="waited", detail="a run-and-wake --wait delivered the result")
+def send_owed(job, start, end, text, deadline):
+    """The one wake a swept job is owed, or the reason it is not sent. True when settled, False when T3 was unreachable and the wake is still owed.
+    The same drop rules as the watcher's, read once: a sweep runs inside every run-and-wake call and never waits for a turn."""
+    stopped = (end or {}).get("stopped") or []
+    done = owner_has_it(job, start.get("thread"), stopped)
+    if done:
+        record(job, "skip", reason=done[0], detail=done[1], **skip_fields(0, stopped))
         return True
     if start.get("thread"):
         started = time.monotonic()
@@ -661,7 +751,7 @@ def sweep_job(job, deadline):
                 return None
             record(job, "end", exit=None, signal=None, duration_s=None, error="lost", lost=True)
         # Whatever the watcher recorded, its job's status is not passed on: a watcher that died before it woke may have been stopped by a shutdown, whose exit status is not a result.
-        if owed and not send_owed(job, start, lost_text(job, start), deadline):
+        if owed and not send_owed(job, start, end, lost_text(job, start), deadline):
             return "owed"
     try:
         os.unlink(lock_path(job))

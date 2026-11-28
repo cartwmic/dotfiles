@@ -1,7 +1,7 @@
 #!/bin/sh
-# Linux checks for this repo, the same command the CI `tests` job runs: the six node tests, then every
+# Linux checks for this repo, the same command the CI `tests` job runs: the node tests, then every
 # Linux Python suite through scripts/ci-par.py (tests/heavy-gate one test per process, the rest one
-# discover process per suite), then tests/kgate and tests/pi-mcp-lazy alone, as two processes at once.
+# discover process per suite), then tests/kgate in four processes and tests/pi-mcp-lazy, each with its timing-bound tests kept out of the pool load.
 #
 # Installs nothing. It assumes these are on PATH: chezmoi (the render tests), zsh, lsof and rsync (the
 # agent-scratch, zshenv and agent-docker tests), node, and python3 (3.14). tests/omarchy-remote-unlock also
@@ -31,6 +31,12 @@ for tool in chezmoi zsh lsof rsync node python3; do
   fi
 done
 
+# Every test's chezmoi refuses all connections (scripts/ci-offline/chezmoi). chezmoi downloads the archives in .chezmoiexternal.toml whenever it reads the
+# source, so a test that runs it on the real source tree, not on tests/support/source_tree.py's copy, fails on every run and not when GitHub answers 503.
+CI_OFFLINE_REAL_CHEZMOI="$(command -v chezmoi)"
+PATH="$(pwd)/scripts/ci-offline:$PATH"
+export CI_OFFLINE_REAL_CHEZMOI PATH
+
 # A fresh runner's disk is cold: read Chromium's files while the node tests run, so the shx tests do not wait on it (dotfiles#702).
 scripts/warm-chromium.sh &
 warm_pid=$!
@@ -41,7 +47,31 @@ node --test tests/pi-patches/patch_failure_chain.test.mjs
 node --test tests/pi-patches/refresh_and_verify.test.mjs
 node --test tests/pi-patches/btw_pi_160.test.mjs
 # A Pi extension is TypeScript: node 22.6 or newer runs it by stripping the types (CI's setup-node step gives it).
-node --experimental-strip-types --disable-warning=ExperimentalWarning --test dot_pi/private_agent/extensions/coordinator-helper-gate/index.test.ts
+# Every test file is run here or named, with the reason it cannot run, in scripts/ci-not-run.txt: tests/ci-coverage fails on one that is neither.
+node --experimental-strip-types --disable-warning=ExperimentalWarning --test \
+  dot_pi/private_agent/extensions/anthropic-stall-retry/index.test.ts \
+  dot_pi/private_agent/extensions/axon-playbook/index.test.ts \
+  dot_pi/private_agent/extensions/bash-default-timeout/index.test.ts \
+  dot_pi/private_agent/extensions/coordinator-helper-gate/index.test.ts \
+  dot_pi/private_agent/extensions/hindsight/index.test.ts \
+  dot_pi/private_agent/extensions/inspect-prompt/index.test.ts \
+  dot_pi/private_agent/extensions/inspect-prompt/profile.test.ts \
+  dot_pi/private_agent/extensions/inspect-prompt/session.test.ts \
+  dot_pi/private_agent/extensions/lead-turn-end/index.test.ts \
+  dot_pi/private_agent/extensions/openrouter-gate/index.test.ts \
+  dot_pi/private_agent/extensions/passage-review/index.test.ts \
+  dot_pi/private_agent/extensions/pi-patch-guard/index.test.ts \
+  dot_pi/private_agent/extensions/refuse-pattern-kill/index.test.ts \
+  dot_pi/private_agent/extensions/web-search/codex.test.ts \
+  dot_pi/private_agent/extensions/web-search/config.test.ts
+# The extensions written as plain modules. The ones that need bun or the Pi SDK are in scripts/ci-not-run.txt.
+node --test \
+  dot_pi/private_agent/extensions/claude-compat-guard/guard.test.mjs \
+  dot_pi/private_agent/extensions/learnings-monitor/capture.test.mjs \
+  dot_pi/private_agent/extensions/learnings-monitor/core/index.test.mjs \
+  dot_pi/private_agent/extensions/learnings-monitor/memory.test.mjs \
+  dot_pi/private_agent/extensions/learnings-monitor/review.test.mjs \
+  dot_pi/private_agent/extensions/learnings-monitor/store.test.mjs
 
 wait "$warm_pid"
 
@@ -59,12 +89,21 @@ python3 scripts/ci-par.py \
   tests/pr-body-check \
   tests/pr-open \
   tests/pr-redact \
+  tests/public-text-check \
   tests/issue-open \
   tests/intent-review-check \
   tests/review-intent \
   tests/known-limits-check \
   tests/mcp-ticket-lookup \
   'dot_local/share/session-recap:test_*.py' \
+  'dot_local/share/passage-review:test_*.py' \
+  dot_local/share/agent-harness/canonical/skills/designing-the-smallest-version/scripts \
+  dot_local/share/agent-harness/canonical/skills/minimizing-prompt-compat-edits/tests \
+  termux/tests \
+  tests/lead-turn-end \
+  tests/pr-record \
+  tests/recap-proof \
+  tests/ci-coverage \
   tests/pi-op-shim \
   tests/seed-op-connect-token \
   tests/op-token \
@@ -147,18 +186,29 @@ python3 scripts/ci-par.py \
   tests/untested-hunks-check \
   tests/skill-scripts || status=1
 
-# tests/kgate and tests/pi-mcp-lazy run after the pool, as two processes at once, and not in the pool: their
-# timing-bound tests (test_a_quota_that_never_frees_is_69_at_the_deadline_with_the_message in kgate,
-# test_second_stop_still_reaches_a_helper_reparented_by_the_first in pi-mcp-lazy) fail under pool load.
-# Each suite streams into its own log file. The files stay on disk, so a hang or a cancel still leaves what
-# each one printed. Both logs print in full, kgate's first, once both have finished.
+# tests/kgate and tests/pi-mcp-lazy run after the pool, not in it: each has timing-bound tests that fail under load (the ones in tests/kgate/timing-bound.txt,
+# which wait on the clock with a deadline of a few seconds; test_second_stop_still_reaches_a_helper_reparented_by_the_first in pi-mcp-lazy).
+# First those two sets, as two processes at once: kgate's timing-bound tests, and all of pi-mcp-lazy. Each streams into its own log file. The
+# files stay on disk, so a hang or a cancel still leaves what each one printed. Then the rest of the kgate tests, in four processes
+# (every fourth test id to each: the slow ones spread), their counts summed in ci-par's "suite counts". kgate's tests start from a
+# script rendered through chezmoi when their module is imported: render it once here and share it through KGATE_SCRIPT, not
+# once per process (test_report and test_prune still render their own copy). A value already set stays. Both logs print in full, kgate's first, once all of it has finished.
+if [ -z "${KGATE_SCRIPT:-}" ]; then
+  KGATE_SCRIPT=$(python3 -c 'import sys; sys.path.insert(0, "tests/kgate"); import test_kgate; print(test_kgate.SCRIPT)')
+  export KGATE_SCRIPT
+  kgate_script_dir=$(dirname "$KGATE_SCRIPT")
+  trap 'rm -rf "$kgate_script_dir"' EXIT
+fi
+kgate_timing=tests/kgate/timing-bound.txt   # test ids, one a line
 logs=$(mktemp -d "${TMPDIR:-/tmp}/ci-linux-logs.XXXXXX")
 echo "[ci-linux] per-suite logs: $logs"
-python3 -m unittest discover -s tests/kgate -v >"$logs/kgate.log" 2>&1 &
+kgate_timing_ids=$(cat "$kgate_timing")
+(cd tests/kgate && exec python3 -m unittest -v $kgate_timing_ids) >"$logs/kgate.log" 2>&1 &
 kgate_pid=$!
 python3 -m unittest discover -s tests/pi-mcp-lazy -v >"$logs/pi-mcp-lazy.log" 2>&1 &
 lazy_pid=$!
 wait "$kgate_pid" || status=1
 wait "$lazy_pid" || status=1
+python3 scripts/ci-par.py --shards 4 tests/kgate --hold-file "$kgate_timing" || status=1
 cat "$logs/kgate.log" "$logs/pi-mcp-lazy.log"
 exit "$status"

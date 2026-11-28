@@ -17,8 +17,10 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+import source_tree  # noqa: E402  (the repo's source with its archive URLs pointed at local stand-ins: chezmoi downloads nothing)
 LEAN = {"node", "python", "gh", "jq", "chezmoi", "loop-engine", "lean-change", "bookends-check", "policy-document", "aqua:1password/cli"}
-SCRIPTS = {"05_container_tools.sh", "20_apply_harness_config.sh", "47_install-gh-wrapper.sh", "65_agent_kit_install.sh", "76_git_credential_linux.sh", "77_git_identity_linux.sh"}
+SCRIPTS = {"05_container_tools.sh", "20_apply_harness_config.sh", "47_install-gh-wrapper.sh", "65_agent_kit_install.sh", "69_retire_research_mise_install.sh", "76_git_credential_linux.sh", "77_git_identity_linux.sh"}
 URL = "http://cliproxyapi.cliproxyapi.svc.cluster.local"
 KEY_FILE = "/run/secrets/cliproxy/api-key"
 LEFT_OUT = [".codex", ".config/systemd", ".config/hypr", ".config/kitty", ".config/zellij", ".config/nvim", ".local/share/instances", ".ssh", "Library",
@@ -36,11 +38,11 @@ CONFIG = "data:\n  profile: %s\n  container:\n    enabled: true\n%s"
 
 
 def chezmoi(config, home, *args, path=None):
-    env = {k: v for k, v in os.environ.items() if k != "OP_SERVICE_ACCOUNT_TOKEN"}   # no 1Password token: the hub key read fails and warns, as on a CI runner
-    env["HOME"] = str(home)
+    env = source_tree.chezmoi_env(home)
+    env.pop("OP_SERVICE_ACCOUNT_TOKEN", None)   # no 1Password token: the hub key read fails and warns, as on a CI runner
     if path is not None:
         env["PATH"] = path
-    return subprocess.run(["chezmoi", "--source", str(ROOT), "--config", str(config), "--config-format", "yaml", "--destination", str(home), *args],
+    return subprocess.run(["chezmoi", "--source", str(source_tree.source()), "--config", str(config), "--config-format", "yaml", "--destination", str(home), *args],
                           capture_output=True, text=True, env=env, timeout=180)
 
 
@@ -75,13 +77,13 @@ class ContainerHome(Scratch):
     def test_only_the_six_run_scripts_stay_and_none_runs_on_every_apply(self):   # c6: plain `chezmoi verify` has no always-pending script
         scripts = {p for p in self.managed if p[:2].isdigit() and p.endswith(".sh") and "/" not in p}
         self.assertEqual(scripts, SCRIPTS)
-        for name in SCRIPTS:   # run_onchange: recorded after the first success, so `chezmoi verify` is clean after it
-            self.assertTrue(list(ROOT.glob("run_onchange_after_" + name.removesuffix(".sh") + ".sh*")), name)
+        for name in SCRIPTS:   # run_onchange or run_once: recorded after the first success, so `chezmoi verify` is clean after it
+            self.assertTrue(list(ROOT.glob("run_o*_after_" + name.removesuffix(".sh") + ".sh*")), name)
 
-    def test_the_gh_wrapper_installer_stays_so_its_rules_run_where_the_agents_work(self):   # dotfiles#960: leaving it out put `gh` straight on the mise shim, with no policy
+    def test_the_gh_wrapper_installer_stays_so_its_rules_run_where_the_agents_work(self):
         self.assertTrue("47_install-gh-wrapper.sh" in self.managed, "the gh wrapper installer must stay in the container's run-script set (.chezmoiignore $keep)")
 
-    def test_the_gitea_credential_helper_is_in_the_pod_beside_the_six_scripts(self):   # the pod's git finds `git credential-gitea-op` on PATH; script 76 (kept) names it
+    def test_the_gitea_credential_helper_is_in_the_pod_beside_the_seven_scripts(self):   # the pod's git finds `git credential-gitea-op` on PATH; script 76 (kept) names it
         self.assertIn(".local/bin/git-credential-gitea-op", self.managed)
         helper = self.home / ".local/bin/git-credential-gitea-op"
         self.assertTrue(os.access(helper, os.X_OK))
@@ -271,7 +273,7 @@ class GhWrapperInThePod(unittest.TestCase):
         done = self.sh("gh pr merge 1 --repo cartwmic/dotfiles --merge")
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         self.assertIn("gh-wrapper: refused `gh pr merge`: merges are squash only", done.stderr)
-        self.assertNotIn("pr merge", self.log.read_text())   # the real gh never saw it
+        self.assertNotIn("pr merge", self.log.read_text())
         rows = [json.loads(line) for line in (self.home / ".local/state/gh-wrapper/policy.jsonl").read_text().splitlines()]
         self.assertEqual([(r["rule"], r["outcome"]) for r in rows], [("squash-only", "refused")])
         done = self.sh("gh --version")
@@ -288,7 +290,7 @@ class GhWrapperInThePod(unittest.TestCase):
             cfg = tmp / (name + ".yaml")
             cfg.write_text("data:\n  profile: personal\n" + container)
             rendered = chezmoi(cfg, home, "execute-template", (ROOT / "run_onchange_after_47_install-gh-wrapper.sh.tmpl").read_text())
-            self.assertEqual(rendered.returncode, 0, rendered.stderr)   # a failed render would give an empty script, and "no link" would pass for nothing
+            self.assertEqual(rendered.returncode, 0, rendered.stderr)
             (tmp / (name + ".sh")).write_text(rendered.stdout)
             done = subprocess.run(["sh", str(tmp / (name + ".sh"))], capture_output=True, text=True, env={**os.environ, "HOME": str(home)}, timeout=60)
             self.assertEqual(done.returncode, 0, done.stderr)

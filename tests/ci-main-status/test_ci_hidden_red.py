@@ -138,6 +138,87 @@ class HiddenRed(base.Fixture):
             self.assertIn(f"gh run rerun {run_id} --repo cartwmic/dotfiles", out)
         self.assertIn("a short sha does not count", out)
 
+    # -- which way is quicker (a main run going or queued makes a rerun wait; a pull request's run starts at once)
+    def quicker(self, rows):
+        """(stdout, the `quicker` field of the call's log line) for the red c2 under a green c3, with `rows` as the other main runs."""
+        self.dotfiles_runs([run(2 + len(rows), self.c3, "success", age=2), run(1, self.c2, "failure", age=1)] + rows)
+        rc, out = self.three_ways("--merge-gate", "dotfiles")
+        self.assertEqual(rc, 1, out)
+        return out, self.log_lines()[-1]["quicker"]
+
+    def test_with_a_main_run_going_the_message_names_the_handles_line_as_quicker(self):
+        for status in ("in_progress", "queued"):   # running, or queued for a runner: either is ahead of a rerun
+            with self.subTest(status=status):
+                out, way = self.quicker([run(10, self.c3, None, status=status, age=3)])
+                self.assertEqual(way, "handles")
+                self.assertIn("  Quicker: the `Handles:` line in a pull request. A main run is going, and a rerun starts only after it ends", out)
+                self.assertIn(f"\n      Handles: {self.c2}\n", out)   # the line to paste, on a line of its own
+                self.assertIn("gh run rerun 1 --repo cartwmic/dotfiles", out)   # the rerun is still offered
+
+    def test_a_pending_main_run_does_not_make_a_rerun_wait_it_only_takes_the_pending_ones_place(self):
+        out, way = self.quicker([run(10, self.c3, None, status="pending", age=3)])   # waiting in the group behind a run that is not there
+        self.assertEqual(way, "rerun")
+        out, way = self.quicker([run(10, self.c3, None, status="in_progress", age=3), run(11, self.c3, None, status="pending", age=4)])
+        self.assertEqual(way, "handles")
+        self.assertNotIn("2 main run", out)   # one running and one pending: a rerun waits behind one run, not two
+
+    def test_a_rerun_queued_behind_another_main_run_still_gets_the_handles_line_as_quicker(self):
+        self.attempts = {"1": {"1": {"status": "completed", "conclusion": "failure"}}}
+        self.dotfiles_runs([run(3, self.c3, None, status="in_progress", age=3), run(2, self.c3, "success", age=2),
+                            run(1, self.c2, None, status="pending", age=1, attempt=2)])   # the incident: the rerun waits behind a main run
+        rc, out = self.three_ways("--merge-gate", "dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertEqual(self.log_lines()[-1]["quicker"], "handles")
+        self.assertIn("  Quicker: the `Handles:` line in a pull request.", out)
+
+    def test_with_no_main_run_going_the_message_names_the_rerun_as_quicker(self):
+        out, way = self.quicker([])
+        self.assertEqual(way, "rerun")
+        self.assertIn("  Quicker: rerun it. No main run is going, so the rerun starts now", out)
+        self.assertIn(f"\n      Handles: {self.c2}\n", out)
+
+    def test_when_the_reds_rerun_is_already_going_or_queued_with_nothing_ahead_the_message_says_to_wait_for_it(self):
+        self.attempts = {"1": {"1": {"status": "completed", "conclusion": "failure"}}}
+        for status in ("in_progress", "queued"):
+            with self.subTest(status=status):
+                self.dotfiles_runs([run(2, self.c3, "success", age=2), run(1, self.c2, None, status=status, age=1, attempt=2)])
+                rc, out = self.three_ways("--merge-gate", "dotfiles")
+                self.assertEqual(rc, 1, out)
+                self.assertEqual(self.log_lines()[-1]["quicker"], "wait")
+                self.assertIn("  Quicker: wait for the rerun that is already going", out)
+
+    def test_with_two_reds_one_reds_rerun_going_is_ahead_of_the_other_reds_rerun(self):
+        first, second = commit(self.src, "first red"), commit(self.src, "second red")
+        tip = commit(self.src, "tip")
+        self.attempts = {"2": {"1": {"status": "completed", "conclusion": "failure"}}}
+        self.dotfiles_runs([run(4, tip, "success", age=3), run(3, second, "failure", age=2), run(2, first, None, status="in_progress", age=1, attempt=2)])
+        rc, out = self.three_ways("--merge-gate", "dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertEqual(self.log_lines()[-1]["quicker"], "handles", out)
+        self.assertNotIn("No main run is going", out)
+        self.attempts["3"] = {"1": {"status": "completed", "conclusion": "failure"}}   # both reds are rerun: nothing else to do but wait
+        self.dotfiles_runs([run(4, tip, "success", age=3), run(3, second, None, status="pending", age=2, attempt=2), run(2, first, None, status="in_progress", age=1, attempt=2)])
+        rc, out = self.three_ways("--merge-gate", "dotfiles")
+        self.assertEqual(self.log_lines()[-1]["quicker"], "wait", out)
+
+    def test_a_red_older_than_the_runs_the_gate_lists_with_its_rerun_going_is_told_to_wait(self):
+        self.script_path = self.patched(RUN_LIMIT=2)   # 2 stands for 100: the run list holds the newest runs only, and a red can be rerun for 30 days
+        self.attempts = {"1": {"1": {"status": "completed", "conclusion": "failure"}}}
+        self.dotfiles_runs([run(3, self.c3, "success", age=3), run(2, self.c3, "success", age=2), run(1, self.c2, None, status="in_progress", age=1, attempt=2)])
+        rc, out = self.three_ways("--merge-gate", "dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertEqual(self.log_lines()[-1]["quicker"], "wait", out)
+        self.assertNotIn("No main run is going", out)
+
+    def test_a_repo_whose_main_runs_are_not_known_to_queue_gets_the_line_but_no_claim_about_quickness(self):
+        self.runs = {self.AK: [run(3, self.c3, None, status="in_progress", age=3), run(2, self.c3, "success", age=2), run(1, self.c2, "failure", age=1)]}
+        self.jobs = {"1": red_unit_jobs()}
+        rc, out = self.three_ways("--merge-gate", "agent-kit")
+        self.assertEqual(rc, 1, out)
+        self.assertNotIn("Quicker", out)
+        self.assertIsNone(self.log_lines()[-1]["quicker"])
+        self.assertIn(f"\n      Handles: {self.c2}\n", out)
+
     def test_a_later_commit_with_a_handles_line_clears_it_once_its_own_run_is_green_and_not_while_it_is_going(self):
         self.red_below_green()
         handler = self.tip_after(f"Fix c2\n\nHandles: {self.c2}")
@@ -483,6 +564,115 @@ class HiddenRed(base.Fixture):
         rc, out = self.three_ways("--merge-gate", "dotfiles", "--pr", "7")
         self.assertEqual(rc, 1, out)
         self.assertNotIn("pin-fix-red", out)
+
+    # -- dotfiles: a `Handles:` line counts only with an issue on record for the red
+    world = None   # the fix commit of handles_world, once built
+
+    def handles_world(self, names, issues=None):
+        """Main's red c2 (its linux step failed) under a green tip, PR 7 (not a pin fix) with its own passing run, PR 7 naming the reds as `names` says, and
+        `issues` ({number: issue row}) as dotfiles' issues. Returns what the call prints and exits with."""
+        if not self.world:
+            git(self.src, "switch", "-q", "-c", "fix", self.c3)
+            (self.src / "f.txt").write_text("fix\n")
+            git(self.src, "add", "f.txt")
+            self.world = commit(self.src, "the fix")
+            git(self.src, "switch", "-q", "main")
+            tip = commit(self.src, "tip")
+            self.dotfiles_runs([run(4, tip, "success", age=4), run(5, self.world, "success", event="pull_request", age=5, branch="fix"), run(1, self.c2, "failure", age=1)])
+            self.jobs = {"1": ci_jobs(steps(linux="failure")), "5": ci_jobs(steps())}
+        self.prs = {"7": {"files": [{"path": "f.txt"}], "changedFiles": 1, "headRefOid": self.world, "headRefName": "fix", **names}}
+        self.issues = {"cartwmic/dotfiles": {str(n): row for n, row in (issues or {}).items()}}
+        return self.streams("--merge-gate", "dotfiles", "--pr", "7")
+
+    def test_a_handles_line_with_no_issue_is_refused_with_both_labels_and_the_command_to_file_one(self):
+        rc, out, err = self.handles_world(base.names(self.c2, issue=None))
+        self.assertEqual(rc, 1, out)
+        self.assertIn("does not name this red", err)
+        self.assertIn("names no issue on record for it", err)
+        self.assertIn("`flaky test` label or the `bug` label", err)   # both ways, in one sentence
+        self.assertIn('gh issue create --repo cartwmic/dotfiles --label "flaky test"', err)
+        self.assertIn(f"Handles: {self.c2}", err)
+        row = self.log_lines()[-1]
+        rules = [r["rule"] for r in row["refused"]]
+        self.assertIn("handles-no-issue", rules)   # a field a count can read, not only the sentence
+        self.assertNotIn("named-red+own-run", rules)
+        self.assertIsNone(row["handles_issues"])
+
+    def test_a_handles_line_passes_with_an_issue_that_holds_the_sha_and_carries_either_label(self):
+        for labels in (("flaky test",), ("bug",), ("bug", "enhancement")):
+            with self.subTest(labels=labels):
+                rc, out, err = self.handles_world(base.names(self.c2), {50: base.backing(self.c2, labels=labels)})
+                self.assertEqual(rc, 0, out + err)
+                self.assertIn("passed as a red-main fix", out)
+                self.assertEqual(self.log_lines()[-1]["handles_issues"], {self.c2: "50"})   # which issue backed which red, for the log
+
+    def test_a_handles_line_is_refused_when_the_issue_does_not_hold_the_sha_or_has_neither_label_or_is_a_pull_request_or_is_not_there(self):
+        wrong = {"a short sha in the body": base.backing(self.c2[:7], labels=("flaky test",)),
+                 "another red's sha": base.backing("0" * 40),
+                 "an empty body": {**base.backing(labels=("bug",)), "body": None},
+                 "a label that is neither": base.backing(self.c2, labels=("enhancement",)),
+                 "no label": base.backing(self.c2, labels=()),
+                 "a pull request, not an issue": base.backing(self.c2, pull=True),
+                 "no such issue": None}
+        for what, row in wrong.items():
+            with self.subTest(what):
+                rc, out, err = self.handles_world(base.names(self.c2), {} if row is None else {50: row})
+                self.assertEqual(rc, 1, out)
+                self.assertIn("names no issue on record for it", err)
+                self.assertIn("handles-no-issue", [r["rule"] for r in self.log_lines()[-1]["refused"]])
+
+    def test_the_issue_must_be_named_in_the_same_message_as_the_line(self):
+        names = base.names(self.c2, issue=None)
+        names["commits"] = names["commits"] + [{"messageHeadline": "another commit", "messageBody": "Closes #50"}]   # the issue is in a different commit
+        rc, out, err = self.handles_world(names, {50: base.backing(self.c2)})
+        self.assertEqual(rc, 1, out)
+        self.assertIn("names no issue on record for it", err)
+        names["commits"] = [{"messageHeadline": "the fix", "messageBody": f"Refs #49 and #50\n\nHandles: {self.c2}"}]   # one of several issues backs it
+        rc, out, err = self.handles_world(names, {49: base.backing("1" * 40), 50: base.backing(self.c2)})
+        self.assertEqual(rc, 0, out + err)
+
+    def test_a_revert_line_needs_no_issue(self):
+        reverts = {"commits": [{"messageHeadline": "Revert it", "messageBody": f"This reverts commit {self.c2}."}], "body": "a description"}
+        rc, out, err = self.handles_world(reverts)
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("passed as a red-main fix", out)
+        self.assertIsNone(self.log_lines()[-1]["handles_issues"])   # no issue backed it
+
+    def test_a_pin_red_stays_exempt_while_a_handles_line_for_the_other_red_still_needs_its_issue(self):
+        git(self.src, "switch", "-q", "-c", "fix", self.c3)
+        (self.src / "pins.txt").write_text("pins\n")
+        git(self.src, "add", "pins.txt")
+        head = commit(self.src, "the pin fix")
+        git(self.src, "switch", "-q", "main")
+        tip = commit(self.src, "tip")
+        self.dotfiles_runs([run(4, tip, "success", age=4), run(5, head, "success", event="pull_request", age=5, branch="fix"),
+                            run(3, self.c3, "failure", age=3), run(1, self.c2, "failure", age=1)])
+        mise = {"name": "mise-tests", "conclusion": "success", "steps": []}
+        self.jobs = {"1": [*ci_jobs(steps(pins="failure", linux="skipped")), mise], "3": [*ci_jobs(steps(linux="failure")), mise],
+                     "5": [*ci_jobs(steps()), {**mise, "conclusion": "skipped"}]}
+        for issues, want in (({}, 1), ({50: base.backing(self.c3)}, 0)):
+            with self.subTest(issues=list(issues)):
+                self.prs = {"7": {"files": [{"path": f} for f in KIT_FILES], "changedFiles": 2, "headRefOid": head, "headRefName": "fix", **base.names(self.c3)}}
+                self.issues = {"cartwmic/dotfiles": {str(n): row for n, row in issues.items()}}
+                rc, out, err = self.streams("--merge-gate", "dotfiles", "--pr", "7")
+                self.assertEqual(rc, want, out + err)
+                self.assertEqual([l for l in out.splitlines() if "pin-fix-red:" in l], [f"  pin-fix-red: {self.c2}"] if want == 0 else [])
+                if want:
+                    self.assertIn(f"put `Handles: {self.c3}`", err)
+                    self.assertNotIn(self.c2, err)   # the pin red is not asked for
+
+    def test_only_dotfiles_asks_for_the_issue_and_only_it_says_so_in_the_red_block(self):
+        self.red_below_green()
+        rc, out = self.three_ways("--merge-gate", "dotfiles")
+        self.assertIn("A `Handles:` line counts when the same message also names an issue (`#N`) whose body holds the red's full sha", out)
+        head = self.fix_pr()
+        self.runs = {self.AK: [run(2, self.c3, "success", age=2), run(1, self.c2, "failure", age=1),
+                               run(4, head, "success", event="workflow_dispatch", age=4, branch="fix")]}
+        self.jobs = {"1": red_unit_jobs(), "4": full_suite_jobs()}
+        self.prs["7"].update(base.names(self.c2, issue=None))   # no issue, and agent-kit still passes it
+        rc, out = self.three_ways("--merge-gate", "agent-kit", "--pr", "7")
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("counts when the same message also names an issue", out)
 
     # -- the rest
     def test_a_newest_red_stays_red_whatever_names_it(self):

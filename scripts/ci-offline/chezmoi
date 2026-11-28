@@ -1,0 +1,29 @@
+#!/bin/sh
+# The chezmoi every Linux test runs: the real one, with every connection refused.
+#
+# chezmoi downloads each archive in .chezmoiexternal.toml whenever it reads the source (`managed`, `cat`, `apply`, `status`, ...). A test that
+# runs it on the real source tree downloads them, and fails once in a while when GitHub answers 503 (dotfiles#909, #954). scripts/ci-linux.sh puts
+# this folder first on PATH, so such a test fails on every run, with the archive address in the message. Tests give chezmoi the copy from
+# tests/support/source_tree.py, whose archives are local files.
+# `execute-template` and `data` download nothing and are unaffected.
+# scripts/ci-linux.sh names the real chezmoi, so a test that links this file into a folder of its own (tests/container-mode) still reaches it.
+if [ -n "${CI_OFFLINE_REAL_CHEZMOI:-}" ] && [ -x "$CI_OFFLINE_REAL_CHEZMOI" ]; then
+  unset https_proxy http_proxy all_proxy ALL_PROXY no_proxy
+  HTTPS_PROXY=http://127.0.0.1:1 HTTP_PROXY=http://127.0.0.1:1 NO_PROXY= exec "$CI_OFFLINE_REAL_CHEZMOI" "$@"
+fi
+# Without it, the first chezmoi on PATH that is not this folder's.
+case $0 in */*) here=${0%/*} ;; *) here=. ;; esac
+self=$(cd "$here" && pwd -P)   # shell builtins only: a test may give this a PATH with no other tool on it
+rest=$PATH
+while [ -n "$rest" ]; do
+  dir=${rest%%:*}
+  case $rest in *:*) rest=${rest#*:} ;; *) rest= ;; esac
+  [ -n "$dir" ] || continue
+  [ "$(cd "$dir" 2>/dev/null && pwd -P)" = "$self" ] && continue
+  if [ -x "$dir/chezmoi" ]; then
+    unset https_proxy http_proxy all_proxy ALL_PROXY no_proxy
+    HTTPS_PROXY=http://127.0.0.1:1 HTTP_PROXY=http://127.0.0.1:1 NO_PROXY= exec "$dir/chezmoi" "$@"
+  fi
+done
+echo "[ci-offline/chezmoi] ERROR: no chezmoi on PATH after $self" >&2
+exit 127

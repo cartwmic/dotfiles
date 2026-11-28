@@ -48,7 +48,20 @@ antidote load
 # Activate mise AFTER antidote so plugins (zsh-autosuggestions, zsh-vi-mode)
 # don't clobber precmd_functions and wipe out __mise_hook.
 if command -v mise &> /dev/null; then
-  eval "$(mise activate zsh)"
+  if [[ -n $ZSH_EXECUTION_STRING ]]; then
+    # `zsh -ic CMD`: no person is typing, and the PATH this shell ends with may be kept by a program that started it for that
+    # (the agent harness reads PATH from `zsh -ilc` once at start and gives it to every session it opens). Full activation puts
+    # each tool's versioned install folder on PATH, so a kept PATH goes stale at the next pin bump. The shims folder does not:
+    # a shim finds the pinned version when it runs. The op shim and the gh wrapper stay ahead of it, as ~/.zshenv and ~/.zprofile
+    # leave them. A person's terminal has no execution string and keeps full activation below (docs/mise-path.md).
+    eval "$(mise activate zsh --shims)"
+    path=("$HOME/.local/share/op-shim" ${path:#"$HOME/.local/share/op-shim"})
+    if [ -d "$HOME/.local/share/gh-wrapper/bin" ]; then
+      path=("$HOME/.local/share/gh-wrapper/bin" ${path:#"$HOME/.local/share/gh-wrapper/bin"})
+    fi
+  else
+    eval "$(mise activate zsh)"
+  fi
 fi
 
 # General PATH updates

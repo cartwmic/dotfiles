@@ -71,7 +71,6 @@ else
   mv "$conf.tmp" "$conf"
 fi
 {{- if $container }}
-# Container mode: the pod has no systemd drop-in for PATH. The image's ENV PATH starts with ~/.local/bin, so a symlink there is first for every process in the pod, T3 and its daemon too.
 if [ "$installed" = 1 ]; then
   mkdir -p "$HOME/.local/bin"
   link="$HOME/.local/bin/gh"

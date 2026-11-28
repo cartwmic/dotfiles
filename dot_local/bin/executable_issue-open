@@ -113,6 +113,16 @@ if "$claims" expand "$copy" > "$expanded"; then :; else
 fi
 [ -s "$expanded" ] || fail 2 "claims expand printed nothing"
 
+# The private-detail check on the title and the expanded body (public-text-check, docs/public-text-check.md): its own output is the refusal message, with the class and the line, never the text.
+command -v public-text-check >/dev/null 2>&1 || fail 2 "public-text-check is not on PATH (it ships with the dotfiles, on both desktop profiles and the agent pod)"
+if public-text-check --repo "$repo" --caller issue-open --title "$title" --file "body=$expanded"; then :; else
+  code=$?
+  case $code in
+    1) refuse 1 "the issue text carries private details (output above); say it in plain words and run issue-open again; nothing was created" ;;
+    *) fail 2 "public-text-check could not run (exit $code, output above)" ;;
+  esac
+fi
+
 # The gh command, as a list of lines so a value with a space survives: --repo, --title and --body-file first, then the flags passed through.
 set -- issue create --repo "$repo" --title "$title" --body-file "$expanded"
 oldifs=$IFS

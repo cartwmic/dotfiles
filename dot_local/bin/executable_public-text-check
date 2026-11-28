@@ -1,0 +1,260 @@
+#!/usr/bin/env python3
+"""public-text-check: refuse new public text that carries a private detail, and name the class and the line, never the string.
+
+    public-text-check --repo OWNER/REPO [--title T] [--file SURFACE=PATH]... [--commits RANGE [--git-dir DIR]] [--pr N] [--caller NAME]
+    public-text-check --repo OWNER/REPO --visibility
+
+--repo is the repository the text is going to. A public repository is checked, and so is one whose visibility cannot be read (`gh api repos/OWNER/REPO` fails or says
+something else): it fails closed. A private repository is not checked: the command passes at once and says so in its record.
+--title T is a title (surface `title`). --file SURFACE=PATH is a text file: SURFACE is `body` (an issue or pull request description), `comment` (a comment or review)
+or `commit`. --commits RANGE reads the messages of `git log RANGE` (in --git-dir, else this directory) as surface `commit`. --pr N reads the title, the description and the
+commit messages of pull request N of --repo from GitHub (the text a squash merge puts on the main branch). Any mix is checked in one run.
+
+The classes come from one table, public-text-classes.json beside the agent harness (PUBLIC_TEXT_CLASSES_FILE names another): per class, a name, a regular expression and the
+surfaces it applies to. Nothing else in the repository holds these patterns. Terms that are themselves private (the owner's name, a private repository's name) are not committed: they are lines
+in ~/.config/public-text-check/terms (PUBLIC_TEXT_TERMS_FILE names another), one literal term per line, case-insensitive, `#` starts a comment; a line may be `CLASS NAME<TAB>TERM` (with no class name a hit is called "private term"). They apply to every surface. A machine without that file checks the table's
+patterns only; the record says how many local terms it read.
+
+Output on a refusal: one line `LABEL:LINE: CLASS` for each hit (LABEL is `title`, `body`, `comment` or `commit SHA`; LINE counts the lines of that text), then a fix line.
+The matched text is never printed or logged. Exit 0 passes (or the repository is not checked, or a hit was passed on purpose, below); 1 refused; 2 could not check (bad
+arguments, a missing or unreadable table, gh or git failed): nothing is passed on a failure.
+
+--visibility prints `private`, `public` or `unknown` and reads no text (the Bash hook asks it before it requires a check of a comment).
+
+A false hit: PUBLIC_TEXT_SKIP="reason" in front of the same command passes it. The use is logged, with the reason, and counted; it is the measure of the table's false hits.
+The variable with no hit in the text does nothing.
+
+Record: one JSON line per run in ${XDG_STATE_HOME:-~/.local/state}/public-text-check/log.jsonl, written on every exit path:
+{utc, caller, repo, outcome (pass|refused|skipped|not-checked (a private repository)|failed), exit, surfaces (the surfaces read), classes ({class: hits}), local_terms, skip_reason (only when skipped),
+ duration_s}. Never the text, a match or a term. --help writes none.
+Both desktop profiles and the agent pod (docs/gate-coverage.md).
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+USAGE = ("usage: public-text-check --repo OWNER/REPO [--visibility] [--title T] [--file SURFACE=PATH]... [--commits RANGE [--git-dir DIR]] [--pr N] [--caller NAME]")
+SURFACES = ("title", "body", "comment", "commit")  # what a caller can name; a comment is read with the rules of a body
+MISSING_TERMS = "public-text-check: note: the private-terms file %s is missing on this machine, so names cannot be checked here; the shape patterns still run.\n"
+TABLE_SURFACES = ("title", "body", "commit")  # what a row of the table can name
+TABLE = os.path.join("~", ".local", "share", "agent-harness", "public-text-classes.json")
+TERMS = os.path.join("~", ".config", "public-text-check", "terms")
+
+
+class Stop(Exception):
+    def __init__(self, code, reason, message):
+        self.code, self.reason, self.message = code, reason, message
+
+
+def parse_args(argv):
+    opts = {"visibility": False, "repo": None, "title": None, "files": [], "commits": None, "git_dir": None, "pr": None, "caller": ""}
+    value_flags = {"--repo": "repo", "--title": "title", "--commits": "commits", "--git-dir": "git_dir", "--pr": "pr", "--caller": "caller"}
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a in ("-h", "--help"):
+            raise SystemExit(print(__doc__.strip()) or 0)
+        if a == "--visibility":
+            opts["visibility"] = True
+            i += 1
+            continue
+        if a in value_flags or a == "--file":
+            if i + 1 >= len(argv):
+                raise Stop(2, "bad-arguments", "%s needs a value\n%s" % (a, USAGE))
+            if a == "--file":
+                surface, sep, path = argv[i + 1].partition("=")
+                if not sep or surface not in SURFACES[1:] or not path:
+                    raise Stop(2, "bad-arguments", "--file takes SURFACE=PATH with SURFACE one of body, comment, commit\n" + USAGE)
+                opts["files"].append((surface, path))
+            else:
+                opts[value_flags[a]] = argv[i + 1]
+            i += 2
+            continue
+        raise Stop(2, "bad-arguments", "unknown argument %s\n%s" % (a, USAGE))
+    if not opts["repo"] or not re.fullmatch(r"[^/\s]+/[^/\s]+", opts["repo"]):
+        raise Stop(2, "bad-arguments", "--repo OWNER/REPO is required\n" + USAGE)
+    if opts["pr"] is not None and not opts["pr"].isdigit():
+        raise Stop(2, "bad-arguments", "--pr takes a pull request number\n" + USAGE)
+    if opts["visibility"]:
+        return opts
+    if opts["title"] is None and not opts["files"] and not opts["commits"] and opts["pr"] is None:
+        raise Stop(2, "bad-arguments", "nothing to check: give --title, --file, --commits or --pr\n" + USAGE)
+    return opts
+
+
+def load_table(path):
+    try:
+        with open(os.path.expanduser(path), encoding="utf-8") as f:
+            table = json.load(f)
+        classes = []
+        for row in table["classes"]:
+            surfaces = tuple(row.get("surfaces") or TABLE_SURFACES)
+            if not set(surfaces) <= set(TABLE_SURFACES):
+                raise ValueError("surface")
+            classes.append({"name": row["name"], "regex": re.compile(row["pattern"], re.M | re.I | re.A), "surfaces": surfaces})
+    except (OSError, ValueError, KeyError, TypeError, re.error) as e:
+        raise Stop(2, "table-unreadable", "the class table %s cannot be read (%s): nothing was checked" % (path, type(e).__name__))
+    return classes
+
+
+def load_terms(path, classes):
+    """Local terms, added to the table's classes: one literal term per line, matched case-insensitively and at a word edge where the term ends in a word character; `#` starts a comment; a line may be `CLASS NAME<TAB>TERM`. Returns how many it read."""
+    try:
+        with open(os.path.expanduser(path), encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except FileNotFoundError:
+        sys.stderr.write(MISSING_TERMS % path)  # it shows, it does not hide: without the file the owner's name and private repository names go unchecked
+        return 0
+    except (OSError, ValueError) as e:
+        raise Stop(2, "terms-unreadable", "the local terms file %s cannot be read (%s): nothing was checked" % (path, type(e).__name__))
+    count = 0
+    for line in lines:
+        line = line.rstrip("\r\n")
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        name, sep, term = line.partition("\t")
+        if not sep:
+            name, term = "private term", line
+        term = term.strip()
+        if not term:
+            continue
+        pattern = re.escape(term)
+        if re.match(r"\w", term[0]):
+            pattern = r"\b" + pattern
+        if re.match(r"\w", term[-1]):
+            pattern += r"\b"
+        classes.append({"name": name.strip() or "private term", "regex": re.compile(pattern, re.I), "surfaces": TABLE_SURFACES})
+        count += 1
+    return count
+
+
+def visibility(repo):
+    """`private`, `public` or `unknown` (gh failed or gave another answer). Only `private` is left unchecked."""
+    try:
+        done = subprocess.run(["gh", "api", "repos/" + repo, "--jq", ".private"], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    except OSError:
+        return "unknown"
+    answer = done.stdout.strip() if done.returncode == 0 else ""
+    return {"true": "private", "false": "public"}.get(answer, "unknown")
+
+
+def run(args, cwd=None):
+    try:
+        done = subprocess.run(args, capture_output=True, text=True, cwd=cwd, stdin=subprocess.DEVNULL)
+    except OSError as e:
+        raise Stop(2, "command-failed", "%s could not run (%s)" % (args[0], e.strerror))
+    if done.returncode != 0:
+        raise Stop(2, "command-failed", "%s failed (exit %d): nothing was checked" % (" ".join(args[:2]), done.returncode))
+    return done.stdout
+
+
+def read_text(path):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except OSError as e:
+        raise Stop(2, "file-unreadable", "cannot read a --file: %s" % (e.strerror or type(e).__name__))
+
+
+def gather(opts):
+    """[(surface, label, text)]"""
+    texts = []
+    if opts["title"] is not None:
+        texts.append(("title", "title", opts["title"]))
+    for surface, path in opts["files"]:
+        texts.append((surface, surface, read_text(path)))
+    if opts["commits"]:
+        out = run(["git", "log", "--format=%H%x00%B%x01", opts["commits"]], cwd=opts["git_dir"])
+        for entry in out.split("\x01"):
+            sha, sep, message = entry.strip("\n").partition("\x00")
+            if sep:
+                texts.append(("commit", "commit " + sha[:8], message))
+    if opts["pr"] is not None:
+        base = "repos/%s/pulls/%s" % (opts["repo"], opts["pr"])
+        pr = json.loads(run(["gh", "api", base]) or "{}")
+        texts.append(("title", "title", pr.get("title") or ""))
+        texts.append(("body", "body", pr.get("body") or ""))
+        commits = json.loads(run(["gh", "api", "--paginate", "--slurp", base + "/commits"]) or "[]")
+        for page in commits:
+            for c in page:
+                texts.append(("commit", "commit " + c["sha"][:8], c["commit"]["message"]))
+    return texts
+
+
+def scan(texts, classes):
+    """[(label, line, class name)], one per class per line."""
+    hits = []
+    for surface, label, text in texts:
+        for number, line in enumerate(text.split("\n"), 1):
+            for c in classes:
+                if ("body" if surface == "comment" else surface) in c["surfaces"] and c["regex"].search(line):
+                    hits.append((label, number, c["name"]))
+    # a multi-line pattern (a runner log line is anchored by ^) is read per line above; nothing here spans lines
+    return hits
+
+
+def write_record(state, rec):
+    try:
+        folder = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "public-text-check")
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, "log.jsonl"), "a") as f:
+            f.write(json.dumps(rec, separators=(",", ":")) + "\n")
+    except OSError:
+        pass  # a log that cannot be written never changes the answer
+
+
+def main(argv):
+    started = time.time()
+    state = {"caller": "", "repo": "", "outcome": "failed", "exit": 2, "surfaces": [], "classes": {}, "local_terms": 0}
+    try:
+        opts = parse_args(argv)
+        state["caller"], state["repo"] = opts["caller"], opts["repo"]
+        if opts["visibility"]:  # what the Bash hook asks before it requires a check of a comment: private, public or unknown; no record, no text read
+            state["log"] = False
+            print(visibility(opts["repo"]))
+            return 0
+        classes = load_table(os.environ.get("PUBLIC_TEXT_CLASSES_FILE") or TABLE)
+        if visibility(opts["repo"]) == "private":
+            state.update(outcome="not-checked", exit=0)
+            print("public-text-check: %s is a private repository; nothing was read" % opts["repo"])
+            return 0
+        state["local_terms"] = load_terms(os.environ.get("PUBLIC_TEXT_TERMS_FILE") or TERMS, classes)
+        texts = gather(opts)
+        state["surfaces"] = sorted({s for s, _, _ in texts})
+        hits = scan(texts, classes)
+        for _, _, name in hits:
+            state["classes"][name] = state["classes"].get(name, 0) + 1
+        skip = os.environ.get("PUBLIC_TEXT_SKIP", "").strip()
+        if not hits:
+            state.update(outcome="pass", exit=0)
+            print("public-text-check: OK %s (%d text%s read)" % (opts["repo"], len(texts), "" if len(texts) == 1 else "s"))
+            return 0
+        if skip:
+            state.update(outcome="skipped", exit=0, skip_reason=skip)
+            print("public-text-check: %d hit%s passed on purpose (PUBLIC_TEXT_SKIP); logged and counted" % (len(hits), "" if len(hits) == 1 else "s"), file=sys.stderr)
+            return 0
+        state.update(outcome="refused", exit=1)
+        print("public-text-check: refused for %s: this text would be public and carries private details" % opts["repo"], file=sys.stderr)
+        for label, number, name in hits:
+            print("  %s:%d: %s" % (label, number, name), file=sys.stderr)
+        print("fix: say it in plain words, without the folder, host, user, id or name (a role or a description does the job). A false hit: "
+              "PUBLIC_TEXT_SKIP=\"reason\" in front of the same command; each use is logged and counted.", file=sys.stderr)
+        print("[public-text-check] ERROR: refused: %d hits in %d classes (%s)" % (len(hits), len(state["classes"]), ", ".join(sorted(state["classes"]))), file=sys.stderr)
+        return 1
+    except Stop as stop:
+        state.update(outcome="failed", exit=stop.code, reason=stop.reason)
+        print("public-text-check: " + stop.message, file=sys.stderr)
+        print("[public-text-check] ERROR: " + stop.reason, file=sys.stderr)
+        return stop.code
+    finally:
+        state["duration_s"] = round(time.time() - started, 3)
+        state["utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        if "--help" not in argv and "-h" not in argv and state.get("log", True):
+            write_record(state, {k: state[k] for k in ("utc", "caller", "repo", "outcome", "exit", "surfaces", "classes", "local_terms", "duration_s") + tuple(k for k in ("skip_reason", "reason") if k in state)})
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

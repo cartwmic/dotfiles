@@ -30,6 +30,22 @@ case "$1 $2" in
 esac
 '''
 
+FAKE_PUBLIC_TEXT_CHECK = r'''#!/bin/sh
+# Stands in for public-text-check: records its arguments in $FAKE_PTC_LOG (none by default), exits as FAKE_PTC_EXIT says, and refuses a title or a body file that holds PRIVATEME.
+log=${FAKE_PTC_LOG:-/dev/null}
+printf 'public-text-check' >> "$log"; for a in "$@"; do printf ' [%s]' "$a" >> "$log"; done; printf '\n' >> "$log"
+[ -z "${FAKE_PTC_EXIT-}" ] || { echo "fake public-text-check said: no" >&2; exit "$FAKE_PTC_EXIT"; }
+prev=
+for a in "$@"; do
+  case $prev in
+    --file) f=${a#*=}; if grep -q PRIVATEME "$f"; then echo "  body:1: owner name" >&2; exit 1; fi ;;
+    --title) case $a in *PRIVATEME*) echo "  title:1: owner name" >&2; exit 1 ;; esac ;;
+  esac
+  prev=$a
+done
+exit 0
+'''
+
 FAKE_CHECK = r'''#!/bin/sh
 printf 'pr-body-check' >> "$FAKE_LOG"; for a in "$@"; do printf ' [%s]' "$a" >> "$FAKE_LOG"; done; printf '\n' >> "$FAKE_LOG"
 # the claims form: --claims-out OUT gets the body with each claim token expanded (here, to the word EXPANDED), and only when the check passes
@@ -52,7 +68,7 @@ class PrOpen(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.dir, True)
         self.bin = self.dir / "bin"
         self.bin.mkdir()
-        for name, text in (("gh", FAKE_GH), ("pr-body-check", FAKE_CHECK), ("pr-record", FAKE_RECORD)):
+        for name, text in (("gh", FAKE_GH), ("pr-body-check", FAKE_CHECK), ("pr-record", FAKE_RECORD), ("public-text-check", FAKE_PUBLIC_TEXT_CHECK)):
             (self.bin / name).write_text(text, encoding="utf-8")
             (self.bin / name).chmod(0o755)
         self.log = self.dir / "calls.log"
@@ -120,6 +136,50 @@ class PrOpen(unittest.TestCase):
         self.assertFalse([c for c in self.calls() if c.startswith("gh")])
         self.assertNotIn("feature", self.remote_branches())
 
+    # -- public-text-check: the text is read for private details before anything is pushed, created or changed -----------------------------
+
+    def ptc_calls(self):
+        log = self.dir / "ptc.log"
+        return log.read_text().splitlines() if log.exists() else []
+
+    def test_create_reads_the_title_the_rendered_body_and_the_branch_commits_before_pushing(self):
+        result = self.run_open("--title", "A title", "--body-file", str(self.body), extra_env={"FAKE_PTC_LOG": str(self.dir / "ptc.log")})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        (call,) = self.ptc_calls()
+        self.assertRegex(call, r"^public-text-check \[--repo\] \[cartwmic/scratch\] \[--caller\] \[pr-open\] \[--title\] \[A title\] \[--file\] \[body=[^\]]*pr-open-rendered[^\]]*\] \[--commits\] \[origin/main\.\.HEAD\]$")
+
+    def test_create_with_private_text_in_the_title_or_the_description_pushes_and_creates_nothing(self):
+        for title, text in (("PRIVATEME title", "clean\n"), ("T", "PRIVATEME in the body\n")):
+            with self.subTest(title=title):
+                self.body.write_text(text)
+                result = self.run_open("--title", title, "--body-file", str(self.body))
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("carries private details", result.stderr)
+                self.assertFalse([c for c in self.calls() if c.startswith("gh")])
+                self.assertNotIn("feature", self.remote_branches())
+
+    def test_edit_reads_the_posted_body_and_a_given_title_and_refuses_before_the_patch(self):
+        result = self.run_open("--edit", "7", "--body-file", str(self.body), "--title", "New", extra_env={"FAKE_PTC_LOG": str(self.dir / "ptc.log")})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        (call,) = self.ptc_calls()
+        self.assertRegex(call, r"^public-text-check \[--repo\] \[cartwmic/scratch\] \[--caller\] \[pr-open\] \[--title\] \[New\] \[--file\] \[body=[^\]]*\]$")
+        self.body.write_text("PRIVATEME\n")
+        result = self.run_open("--edit", "7", "--body-file", str(self.body))
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(self.patches()[1:], [])  # only the first edit patched
+
+    def test_a_public_text_check_that_cannot_run_or_is_missing_stops_create_and_edit(self):
+        for args in (("--title", "T", "--body-file", str(self.body)), ("--edit", "7", "--body-file", str(self.body))):
+            result = self.run_open(*args, extra_env={"FAKE_PTC_EXIT": "2"})
+            self.assertEqual(result.returncode, 2, args)
+            self.assertIn("public-text-check could not run", result.stderr)
+        (self.bin / "public-text-check").unlink()
+        result = self.run_open("--title", "T", "--body-file", str(self.body), extra_env={"PATH": "%s:/usr/bin:/bin" % self.bin})
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("public-text-check is not on PATH", result.stderr)
+        self.assertNotIn("feature", self.remote_branches())
+        self.assertFalse(self.patches())
+
     def test_an_accepted_body_pushes_the_branch_and_opens_the_pr(self):
         result = self.run_open("--title", "A title", "--body-file", str(self.body))
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -131,7 +191,7 @@ class PrOpen(unittest.TestCase):
         self.assertIn("pr-body-check cartwmic/scratch 42 --skip-intent-review", lines[4])  # the form that reads the record; the --body-file form does not
         self.assertIn("feature", self.remote_branches())
         calls = self.calls()
-        self.assertTrue(calls[0].startswith("pr-body-check [--body-file] ["), calls)
+        self.assertTrue(calls[0].startswith("pr-body-check [--repo] [cartwmic/scratch] [--body-file] ["), calls)  # the repository is always passed: with none the check treats the target as public
         self.assertIn("[--base] [origin/main]", calls[0])  # the same branch commits and diff as the hook's own form reads
         create = calls[1]
         for part in ("[pr] [create]", "[--repo] [cartwmic/scratch]", "[--base] [main]", "[--head] [feature]", "[--title] [A title]", "[--body-file]"):
@@ -261,6 +321,12 @@ class PrOpen(unittest.TestCase):
         self.run_open("--edit", "7", "--body-file", str(self.body), "--title", "New title")
         self.assertTrue(self.calls()[0].startswith("pr-body-check"))
         self.assertIn("[--title] [New title]", self.calls()[0])
+
+    def test_every_body_check_call_names_the_repository(self):
+        self.run_open("--edit", "7", "--body-file", str(self.body))
+        for call in self.calls():
+            if call.startswith("pr-body-check"):
+                self.assertIn("[--repo] [", call)
 
     def test_edit_without_a_title_gives_the_body_check_none(self):
         self.run_open("--edit", "7", "--body-file", str(self.body))

@@ -10,11 +10,14 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+import source_tree  # noqa: E402  (the repo's source with its archive URLs pointed at local stand-ins: chezmoi downloads nothing)
 SYSTEMS = ("linux", "darwin", "windows")
 PROFILES = ("personal", "axon-work-computer")
 LINUX_SCRIPT = ".local/bin/agent-desktop"
@@ -30,7 +33,7 @@ def chezmoi(source, system, profile, *args):
         override = json.dumps({"profile": profile, "chezmoi": {"os": system}})
         r = subprocess.run(["chezmoi", "--source", str(source), "--config", str(cfg), "--config-format", "yaml",
                             "--destination", str(home), "--override-data", override, *args],
-                           capture_output=True, text=True, env=dict(os.environ, HOME=str(home)), timeout=120)
+                           capture_output=True, text=True, env=source_tree.chezmoi_env(home), timeout=120)
     if r.returncode:
         raise AssertionError("chezmoi %s (%s, %s) failed: %s" % (args[0], system, profile, r.stderr))
     return r.stdout
@@ -57,7 +60,7 @@ def ignored(system, profile):
 class LayoutTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.managed = {(s, p): managed(REPO, s, p) for s in SYSTEMS for p in PROFILES}
+        cls.managed = {(s, p): managed(source_tree.source(), s, p) for s in SYSTEMS for p in PROFILES}
 
     def test_personal_linux_gets_the_omarchy_script(self):
         self.assertIn(LINUX_SCRIPT, self.managed[("linux", "personal")])

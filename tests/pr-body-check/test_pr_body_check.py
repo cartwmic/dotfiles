@@ -36,6 +36,22 @@ echo "fake stack-map-merge-check said: refused"
 exit "${FAKE_STACK_MAP_EXIT:-0}"
 '''
 
+FAKE_PUBLIC_TEXT_CHECK = r'''#!/bin/sh
+# Stands in for public-text-check: records its arguments in $FAKE_PTC_LOG (none by default), exits as FAKE_PTC_EXIT says, and refuses a title or a body file that holds PRIVATEME.
+log=${FAKE_PTC_LOG:-/dev/null}
+printf 'public-text-check' >> "$log"; for a in "$@"; do printf ' [%s]' "$a" >> "$log"; done; printf '\n' >> "$log"
+[ -z "${FAKE_PTC_EXIT-}" ] || { echo "fake public-text-check said: no" >&2; exit "$FAKE_PTC_EXIT"; }
+prev=
+for a in "$@"; do
+  case $prev in
+    --file) f=${a#*=}; if grep -q PRIVATEME "$f"; then echo "  body:1: owner name" >&2; exit 1; fi ;;
+    --title) case $a in *PRIVATEME*) echo "  title:1: owner name" >&2; exit 1 ;; esac ;;
+  esac
+  prev=$a
+done
+exit 0
+'''
+
 FAKE_NODE = r'''#!/bin/sh
 # Stands in for node. The real check reads the PR through gh, so this makes the same kind of gh call.
 exec gh pr view 1 --repo cartwmic/dotfiles --json body
@@ -48,7 +64,7 @@ class ShimGhEnvironment(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.dir, True)
         self.bin = self.dir / "bin"
         self.bin.mkdir()
-        for name, text in (("gh", FAKE_GH), ("node", FAKE_NODE)):
+        for name, text in (("gh", FAKE_GH), ("node", FAKE_NODE), ("public-text-check", FAKE_PUBLIC_TEXT_CHECK)):
             (self.bin / name).write_text(text, encoding="utf-8")
             (self.bin / name).chmod(0o755)
         (self.bin / "ci-main-status").write_text(FAKE_CI_MAIN_STATUS, encoding="utf-8")
@@ -76,10 +92,10 @@ class ShimGhEnvironment(unittest.TestCase):
 class ShimThreadCheck(ShimGhEnvironment):
     """After the body check passes on `pr-body-check REPO PR`, the shim runs `ci-main-status --threads REPO PR` (playbook 580f3e02 step 3)."""
 
-    def shim(self, *args, node_exit=0, threads_exit=0, stack_map_exit=0):
+    def shim(self, *args, node_exit=0, threads_exit=0, stack_map_exit=0, env_extra=None):
         env = {"PATH": "%s:/usr/bin:/bin" % self.bin, "HOME": str(self.home), "FAKE_GH_ENV_LOG": str(self.env_log),
                "FAKE_THREADS_LOG": str(self.threads_log), "FAKE_THREADS_EXIT": str(threads_exit),
-               "FAKE_ORDER_LOG": str(self.order_log), "FAKE_STACK_MAP_EXIT": str(stack_map_exit)}
+               "FAKE_ORDER_LOG": str(self.order_log), "FAKE_STACK_MAP_EXIT": str(stack_map_exit), **(env_extra or {})}
         (self.bin / "node").write_text("#!/bin/sh\necho body-check >> \"$FAKE_ORDER_LOG\"\nexit %d\n" % node_exit, encoding="utf-8")
         return subprocess.run(["sh", str(SHIM), *args], env=env, capture_output=True, text=True, timeout=60)
 
@@ -116,6 +132,30 @@ class ShimThreadCheck(ShimGhEnvironment):
         for args in (["--pr", "12", "--repo", "cartwmic/dotfiles"], ["cartwmic/dotfiles"], ["cartwmic/dotfiles", "x"]):
             self.assertEqual(self.shim(*args).returncode, 0, args)
         self.assertEqual(self.threads_calls(), [])
+
+    def test_the_merge_form_reads_the_pr_text_for_private_details_before_any_other_check(self):
+        log = self.dir / "ptc.log"
+        env = {"FAKE_PTC_LOG": str(log)}
+        for repo, expected in (("cartwmic/dotfiles", "cartwmic/dotfiles"), ("dotfiles", "cartwmic/dotfiles"), ("cartwmic/loop-engine", "cartwmic/loop-engine")):
+            log.unlink(missing_ok=True)
+            self.assertEqual(self.shim(repo, "12", env_extra=env).returncode, 0, repo)
+            self.assertEqual(log.read_text().splitlines(), ["public-text-check [--repo] [%s] [--pr] [12] [--caller] [pr-body-check]" % expected])
+        for args in (("cartwmic/dotfiles", "12", "--skip-intent-review"), ("--body-file", "/tmp/pr-body.x"), ("cartwmic/dotfiles",)):
+            log.unlink(missing_ok=True)
+            self.shim(*args, env_extra=env)
+            self.assertFalse(log.exists(), args)  # only the merge form reads the PR's commits and title
+
+    def test_a_refusal_or_a_failure_of_the_private_detail_check_stops_the_merge_check_and_a_missing_one_is_127(self):
+        for code in (1, 2):
+            self.order_log.unlink(missing_ok=True)
+            result = self.shim("cartwmic/dotfiles", "12", env_extra={"FAKE_PTC_EXIT": str(code)})
+            self.assertEqual(result.returncode, code)
+            self.assertNotIn("body-check", self.order())
+        (self.bin / "public-text-check").unlink()
+        result = self.shim("cartwmic/dotfiles", "12")
+        self.assertEqual(result.returncode, 127)
+        self.assertIn("public-text-check is not on PATH", result.stderr)
+        self.assertEqual(self.shim("cartwmic/dotfiles", "12", "--skip-intent-review").returncode, 0)
 
     def order(self):
         return self.order_log.read_text(encoding="utf-8").splitlines() if self.order_log.exists() else []

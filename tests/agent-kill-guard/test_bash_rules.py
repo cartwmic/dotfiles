@@ -26,11 +26,11 @@ KUBE = {"/kc/homelab": "current-context: %s\n" % HOMELAB, "/kc/other": "apiVersi
         "/kc/none": "apiVersion: v1\ncontexts: []\n"}
 
 
-def ctx(profile="personal", tool="Bash", env=None, cwd="/work", files=None, origins=None, container=False, coordinator_repo=None):
+def ctx(profile="personal", tool="Bash", env=None, cwd="/work", files=None, origins=None, container=False, coordinator_repo=None, visibility=None):
     files = KUBE if files is None else files
     origins = origins or {}
     return bash_rules.Context(tool=tool, profile=profile, env=env or {}, cwd=cwd, read_file=files.get,
-                              origin_of=lambda directory: origins.get(directory), container=container, coordinator_repo=coordinator_repo)
+                              origin_of=lambda directory: origins.get(directory), container=container, coordinator_repo=coordinator_repo, visibility=visibility)
 
 
 def check(text, platform="linux", **kw):
@@ -277,6 +277,17 @@ class Merge(unittest.TestCase):
                 self.assertIn("checked PR 7, but `gh pr merge` merges PR 5", message)
                 self.assertIn("pr-body-check <repo> <pr>", message)
 
+    def test_the_refusal_sends_a_playbook_edit_to_a_branch_then_merge_pr_and_never_to_merge(self):
+        # The kit's `--merge` runs `gh pr merge` as a child process the hook never sees, so the refusal must not tell anyone to use it.
+        message = check("gh pr merge 12")
+        self.assertIn("a playbook edit is made only by the coordinator (any other session sends it to the coordinator by agent message)", message)
+        self.assertIn("on a branch in a worktree, without `--pr`, then `issue-open`, `pr-open` and `~/git/coordinator/scripts/merge-pr.sh PR`", message)
+        self.assertIn("never add `--merge` to the playbook CLI", message)
+        self.assertIn("goes out at once in its own PR", message)
+        self.assertIn("waits on branch `playbook/batch` for the coordinator's daily digest", message)
+        self.assertNotIn("--pr --merge", message)
+        self.assertNotIn("--red-main-fix", message)
+
     def test_the_refusal_names_a_command_that_satisfies_both_gates(self):
         # The command the refusal prints, with <repo>/<pr> filled in, must itself pass the hook.
         message = check("gh pr merge 12")
@@ -389,7 +400,7 @@ class Merge(unittest.TestCase):
 
     def test_the_gated_paths_are_not_gh_commands_the_hook_sees(self):
         for text in ["~/git/coordinator/scripts/merge-pr.sh 440",
-                     "COORDINATOR_STATE_DIR=$HOME/.local/share/coordinator node --experimental-strip-types ~/git/coordinator/src/playbook/cli.ts retire fab9b713 --pr --merge",
+                     "COORDINATOR_STATE_DIR=$HOME/.local/share/coordinator node --experimental-strip-types ~/git/coordinator/src/playbook/cli.ts retire fab9b713 --pr",
                      "loop_engine_bump.py v0.49.1", "agent_kit_bump.py v1.4.0", "gh pr view 12", "gh pr list", "echo gh pr merge 12",
                      "git merge main"]:
             with self.subTest(text=text):
@@ -557,7 +568,7 @@ class IssueBody(unittest.TestCase):
                "gh issue create --repo cartwmic/x --title t --body-file /tmp/b.md --label bug", "cd /tmp && gh issue create --title t", "echo x | gh issue create --title t --body-file -",
                "sh -c 'gh issue create --title t'", "sudo gh issue create --title t", "gh api repos/cartwmic/x/issues -f title=t -f body=b", "gh api -X POST repos/cartwmic/x/issues --input /tmp/i.json",
                "gh api --method=POST https://api.github.com/repos/cartwmic/x/issues -F title=t"]
-    PASSES = ["gh issue edit 5 --body-file /tmp/b.md", "gh issue comment 5 --body hi", "gh issue list", "gh issue view 5", "gh issue close 5", "gh issue status",
+    PASSES = ["gh issue edit 5 --body-file /tmp/b.md", "gh issue comment 5", "gh issue list", "gh issue view 5", "gh issue close 5", "gh issue status",
               "issue-open --title t --body-file /tmp/b.md", "issue-open --title t --body-file - --dry-run", "echo gh issue create", "grep 'gh issue create' notes.md",
               "gh api repos/cartwmic/x/issues", "gh api repos/cartwmic/x/issues/5/comments -f body=hi", "gh api -X GET repos/cartwmic/x/issues -f labels=bug", "gh pr list"]
 
@@ -621,6 +632,76 @@ class IssueBody(unittest.TestCase):
         self.assertEqual(found[2], "gh issue create")
         api = bash_rules.refusal("gh api repos/cartwmic/x/issues -f title=SECRETVALUE", bash_rules.Context(**dict(ctx(coordinator_repo=self.repo)._asdict(), platform="linux")))
         self.assertNotIn("SECRETVALUE", json.dumps(api[1].log))
+
+
+class PublicComment(unittest.TestCase):
+    """A comment or review that carries text goes through `public-text-check` first, unless its repository is known to be private."""
+    ORIGINS = {"/work": "https://github.com/cartwmic/dotfiles.git"}
+    F = "/tmp/comment.aB3xY9"
+
+    def comment(self, text, visible="public", **kw):
+        asked = []
+        message = check(text, origins=self.ORIGINS, visibility=lambda repo: asked.append(repo) or visible, **kw)
+        return message, asked
+
+    def test_text_posted_without_the_check_is_refused_and_names_the_check(self):
+        for text in ("gh pr comment 5 --body hi", "gh issue comment 5 -b hi", "gh pr review 5 --comment --body hi", "gh pr comment 5 --body-file %s" % self.F,
+                     "gh pr comment 5 --body-file - < /tmp/x", "sh -c 'gh issue comment 5 --body hi'", "gh -R cartwmic/x pr comment 5 --body hi"):
+            with self.subTest(text=text):
+                message, _ = self.comment(text)
+                self.assertIn("public-text-check --repo", message or "")
+                self.assertIn("PUBLIC_TEXT_SKIP", message)
+
+    def test_a_check_of_that_file_for_that_repository_earlier_in_the_and_list_passes(self):
+        for text in ("public-text-check --repo cartwmic/dotfiles --file comment=%s && gh pr comment 5 --body-file %s" % (self.F, self.F),
+                     "public-text-check --repo=cartwmic/x --file comment=%s && gh issue comment 5 --repo cartwmic/x --body-file %s" % (self.F, self.F),
+                     "PUBLIC_TEXT_SKIP=x public-text-check --repo cartwmic/dotfiles --file comment=%s && gh pr review 5 --body-file %s" % (self.F, self.F)):
+            with self.subTest(text=text):
+                self.assertIsNone(self.comment(text)[0])
+
+    def test_a_check_of_another_file_or_another_repository_or_a_body_surface_does_not_count(self):
+        for text in ("public-text-check --repo cartwmic/dotfiles --file comment=/tmp/other && gh pr comment 5 --body-file %s" % self.F,
+                     "public-text-check --repo cartwmic/x --file comment=%s && gh pr comment 5 --body-file %s" % (self.F, self.F),
+                     "public-text-check --repo cartwmic/dotfiles --file body=%s && gh pr comment 5 --body-file %s" % (self.F, self.F),
+                     "public-text-check --repo cartwmic/dotfiles --file comment=%s ; gh pr comment 5 --body-file %s" % (self.F, self.F),
+                     "public-text-check --repo cartwmic/dotfiles --file comment=%s || gh pr comment 5 --body-file %s" % (self.F, self.F)):
+            with self.subTest(text=text):
+                self.assertIsNotNone(self.comment(text)[0])
+
+    def test_a_url_names_the_repository_whatever_the_checkout_is(self):
+        message, asked = self.comment("gh pr comment https://github.com/someone/else/pull/5 --body hi", visible="public")
+        self.assertIsNotNone(message)
+        self.assertEqual(asked, ["someone/else"])
+        message, asked = self.comment("gh issue comment https://github.com/someone/else/issues/5 --body hi", visible="private")
+        self.assertEqual((message, asked), (None, ["someone/else"]))
+        checked = "public-text-check --repo someone/else --file comment=%s && gh pr comment https://github.com/someone/else/pull/5 --body-file %s" % (self.F, self.F)
+        self.assertIsNone(self.comment(checked)[0])
+
+    def test_a_visibility_query_is_not_a_check_of_the_file(self):
+        text = "public-text-check --repo cartwmic/dotfiles --visibility --file comment=%s && gh pr comment 5 --body-file %s" % (self.F, self.F)
+        self.assertIsNotNone(self.comment(text)[0])
+
+    def test_a_private_repository_is_not_refused_and_an_unknown_one_is(self):
+        self.assertIsNone(self.comment("gh pr comment 5 --body hi", visible="private")[0])
+        self.assertIsNotNone(self.comment("gh pr comment 5 --body hi", visible="unknown")[0])
+        message, asked = self.comment("gh -R cartwmic/x issue comment 5 --body hi", visible="private")
+        self.assertEqual((message, asked), (None, ["cartwmic/x"]))
+
+    def test_a_command_that_posts_no_text_or_is_not_a_comment_passes(self):
+        for text in ("gh pr review 5 --approve", "gh pr comment 5 --edit-last", "gh pr view 5", "gh pr list", "echo gh pr comment 5 --body hi", "gh issue comment 5"):
+            with self.subTest(text=text):
+                self.assertIsNone(self.comment(text)[0])
+
+    def test_an_unknown_flag_is_refused_and_a_repo_that_cannot_be_told_is_refused(self):
+        self.assertIn("--frobnicate", self.comment("gh pr comment 5 --frobnicate --body hi")[0])
+        message = check("gh pr comment 5 --body hi", visibility=lambda repo: "public")  # no origin known here, no -R
+        self.assertIsNotNone(message)
+
+    def test_it_runs_where_the_other_gates_run_and_nowhere_else(self):
+        for profile in ("personal", "axon-work-computer"):
+            self.assertIsNotNone(self.comment("gh pr comment 5 --body hi", profile=profile)[0])
+        for profile in ("termux", None):
+            self.assertIsNone(self.comment("gh pr comment 5 --body hi", profile=profile)[0])
 
 
 class IssueBodyRealHook(unittest.TestCase):
@@ -2026,6 +2107,111 @@ class LiveGitWorkCheckout(unittest.TestCase):
 
     def test_without_the_file_the_work_checkout_is_not_known(self):
         self.assertIsNone(self.work("git -C /Users/test/coordinator-work commit -m x", repo=None))
+
+
+class CheckMustGuard(unittest.TestCase):
+    """A check counts only when the command it guards runs on the check's success. `! check && cmd` runs cmd when the check refused, and `true || check && cmd` runs
+    it with the check skipped, so neither is a check; the plain `a && b && c` chain still is."""
+    GATE, BODY, MERGE = "ci-main-status --merge-gate o/r", "pr-body-check o/r 5", "gh pr merge 5 --squash"
+    F = "/tmp/comment.aB3xY9"
+    CHECK, POST = "public-text-check --repo cartwmic/dotfiles --file comment=" + F, "gh pr comment 5 --body-file " + F
+    ORIGINS = {"/work": "https://github.com/cartwmic/dotfiles.git"}
+
+    def merge(self, text):
+        return check(text)
+
+    def comment(self, text):
+        return check(text, origins=self.ORIGINS, visibility=lambda repo: "public")
+
+    def shapes(self, first, second, last):
+        """The shapes that must not count `first` (and, for a merge, `second`) as a check of `last`."""
+        return [
+            "! %s && %s && %s" % (first, second, last),                    # negated
+            "%s && ! %s && %s" % (second, first, last),
+            "%s && ! ! %s && %s" % (second, first, last),
+            "! %s && %s" % (first, last),
+            "%s || true && %s" % (first, last),                             # the exit status is dropped by `|| true`
+            "true || %s && %s" % (first, last),                             # the check is skipped when the left side passes
+            "%s && true || %s && %s" % (second, first, last),
+            "%s; %s" % (first, last),                                       # a new statement
+            "%s\n%s" % (first, last),
+            "(%s) && %s" % (first, last),                                   # a subshell or group
+            "( %s; true ) && %s" % (first, last),
+            "{ %s; } && %s" % (first, last),
+            "%s | cat && %s" % (first, last),                               # a pipe throws the exit status away
+            "%s |& cat && %s" % (first, last),
+            "%s | %s" % (first, last),                                      # the check runs beside the command, not before it
+            "%s & %s" % (first, last),                                      # in the background
+            "if ! %s; then %s; fi" % (first, last),                         # runs when the check refused
+            "if %s; then %s; fi" % (first, last),
+            "%s || %s" % (first, last),
+            "sh -c '! %s && %s'" % (first, last),                           # the same, in a nested shell
+            "%s && sh -c '! %s && %s'" % (second, first, last),
+        ]
+
+    def test_a_merge_after_a_check_that_does_not_guard_it_is_refused(self):
+        for text in self.shapes(self.BODY, self.GATE, self.MERGE) + self.shapes(self.GATE, self.BODY, self.MERGE):
+            with self.subTest(text=text):
+                self.assertIsNotNone(self.merge(text))
+
+    def test_the_refusal_says_what_makes_a_check_count(self):
+        sentence = "A check counts only when the command it guards runs on the check's success"
+        self.assertIn(sentence, self.merge("! %s && %s" % (self.BODY, self.MERGE)))
+        self.assertIn(sentence, self.comment("! %s && %s" % (self.CHECK, self.POST)))
+
+    def test_a_comment_after_a_check_that_does_not_guard_it_is_refused(self):
+        for text in self.shapes(self.CHECK, "true", self.POST):
+            with self.subTest(text=text):
+                self.assertIsNotNone(self.comment(text))
+
+    def test_the_plain_chain_and_the_shapes_that_guard_still_pass(self):
+        for text in ["%s && %s && %s" % (self.GATE, self.BODY, self.MERGE),
+                     "%s && %s && %s" % (self.BODY, self.GATE, self.MERGE),
+                     "%s &&\n %s &&\n %s" % (self.GATE, self.BODY, self.MERGE),
+                     "echo a || echo b && %s && %s && %s" % (self.GATE, self.BODY, self.MERGE),   # an earlier `||` is a different list
+                     "echo a; %s && %s && %s" % (self.GATE, self.BODY, self.MERGE),
+                     "(%s && %s && %s)" % (self.GATE, self.BODY, self.MERGE),
+                     "%s && %s && %s | tee /tmp/out" % (self.GATE, self.BODY, self.MERGE),
+                     "%s && %s && sh -c '%s'" % (self.GATE, self.BODY, self.MERGE)]:
+            with self.subTest(text=text):
+                self.assertIsNone(self.merge(text))
+        self.assertIsNone(self.comment("%s && %s" % (self.CHECK, self.POST)))
+        self.assertIsNone(self.comment("echo a || echo b && %s && %s" % (self.CHECK, self.POST)))
+
+    def test_a_merge_at_the_end_of_a_pipeline_after_the_checks_is_guarded(self):
+        self.assertIsNone(self.merge("%s && %s && echo x | %s" % (self.GATE, self.BODY, self.MERGE)))
+        self.assertIsNotNone(self.merge("%s && echo x | %s" % (self.GATE, self.MERGE)))
+        self.assertIsNotNone(self.merge("%s | %s" % (self.BODY, self.MERGE)))
+
+    def test_the_guard_log_says_why_a_merge_or_comment_was_refused(self):
+        def log(text, **kw):
+            context = bash_rules.Context(**dict(ctx(**kw)._asdict(), platform="linux"))
+            return bash_rules.refusal(text, context)[1].log
+        unguarded, missing = bash_rules.MERGE_UNGUARDED, bash_rules.MERGE_MISSING
+        for text, reason in [
+                (self.MERGE, missing),                                                          # no check at all
+                ("%s && %s" % (self.GATE, self.MERGE), missing),                                # the body check is absent; the gate there does guard
+                ("%s && %s" % (self.BODY, self.MERGE), missing),
+                ("%s >/dev/null && %s && %s" % (self.GATE, self.BODY, self.MERGE), missing),    # a check not in its real form is not a check seen
+                ("sh -c '%s && %s' && %s" % (self.GATE, self.BODY, self.MERGE), missing),       # checks in a nested shell do not guard a merge outside it
+                ("! %s && %s && %s" % (self.BODY, self.GATE, self.MERGE), unguarded),           # negated
+                ("%s && %s || true && %s" % (self.GATE, self.BODY, self.MERGE), unguarded),
+                ("%s; %s && %s" % (self.GATE, self.BODY, self.MERGE), unguarded),
+                ("%s | cat && %s && %s" % (self.GATE, self.BODY, self.MERGE), unguarded)]:
+            with self.subTest(text=text):
+                self.assertEqual(log(text), {"reason": reason, "command": "gh pr merge"})
+        self.assertIn("another pull request", log("%s && %s && gh pr merge 6" % (self.GATE, self.BODY))["reason"])
+        self.assertEqual(log("%s && %s && gh pr merge 5 -R cartwmic/cartwmic-homelab-v2" % (self.GATE, self.BODY)),
+                         {"reason": "homelab merge goes through its merge script", "command": "gh pr merge"})
+        self.assertEqual(log("%s && %s && gh pr merge 5 -R cartwmic/coordinator" % (self.GATE, self.BODY)),
+                         {"reason": "coordinator merge goes through its merge script", "command": "gh pr merge"})
+        kw = dict(origins=self.ORIGINS, visibility=lambda repo: "public")
+        self.assertEqual(log(self.POST, **kw)["reason"], "the comment check is missing, or is not in its real form")
+        self.assertEqual(log("! %s && %s" % (self.CHECK, self.POST), **kw)["reason"], "the comment check is written before the comment but the comment does not run on its success")
+        self.assertEqual(log("%s || true && %s" % (self.CHECK, self.POST), **kw)["reason"], "the comment check is written before the comment but the comment does not run on its success")
+
+    def test_the_check_that_is_negated_in_one_place_still_fails_the_chain_in_a_nested_shell(self):
+        self.assertIsNotNone(self.merge("%s && sh -c '! %s && %s'" % (self.GATE, self.BODY, self.MERGE)))
 
 
 if __name__ == "__main__":

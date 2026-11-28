@@ -397,6 +397,8 @@ Library/LaunchAgents/local.session-keepalive.plist
 .local/bin/pr-open
 # pr-redact needs only gh, but it belongs with the PR gates: it is the one way to redact a merged description, beside pr-open, which refuses to.
 .local/bin/pr-redact
+# public-text-check needs only gh and python3, and the pr-open, issue-open and pr-body-check doors call it, so it goes where they go.
+.local/bin/public-text-check
 .local/bin/intent-review-check
 # issue-open runs claims, which runs the coordinator checkout's claims command.
 .local/bin/issue-open
@@ -549,9 +551,9 @@ Library/Preferences/pnpm/**
 {{- if (includeTemplate "container" . | fromJson).enabled }}
 # Container mode. Everything above that is not left out stays. This leaves out what needs a desktop, systemd or launchd, and the files of tools the container does not install
 # (the lean set is dot_config/mise/conf.d/container.toml.tmpl). A new path is in the pod unless it is listed here; tests/container-mode names the exact set that stays.
-# Run scripts: only the six below run (the tools, the harness config, agent-kit, the gh wrapper, and the two git settings a pod needs to push and commit). A script nobody listed is left out, so a new one never reaches the pod unseen, and plain `chezmoi verify` has no always-pending run_after
+# Run scripts: only the seven below run (the tools, the harness config, agent-kit, the gh wrapper, the two git settings a pod needs to push and commit, and the removal of the retired research install a pod from before its retirement still holds). A script nobody listed is left out, so a new one never reaches the pod unseen, and plain `chezmoi verify` has no always-pending run_after
 # script to fail on (c6). The list is computed, not written: every run_ script in the source root, minus these.
-{{- $keep := list "05_container_tools.sh" "20_apply_harness_config.sh" "47_install-gh-wrapper.sh" "65_agent_kit_install.sh" "76_git_credential_linux.sh" "77_git_identity_linux.sh" }}
+{{- $keep := list "05_container_tools.sh" "20_apply_harness_config.sh" "47_install-gh-wrapper.sh" "65_agent_kit_install.sh" "76_git_credential_linux.sh" "69_retire_research_mise_install.sh" "77_git_identity_linux.sh" }}
 {{- range $path := glob (joinPath .chezmoi.sourceDir "run_*") }}
 {{-   $name := regexReplaceAll "^run_(once_|onchange_)?(before_|after_)?" (base $path | trimSuffix ".tmpl") "" }}
 {{-   if not (has $name $keep) }}

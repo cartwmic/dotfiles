@@ -138,6 +138,14 @@ check() {
     *) fail 2 "pr-body-check could not run (exit $code, output above)" ;; esac
 }
 
+# The private-detail check on the text about to become public (public-text-check, docs/public-text-check.md): its own output is the refusal message, with the class and the line, never the text.
+public_check() { # public_check [args for public-text-check]
+  command -v public-text-check >/dev/null 2>&1 || fail 2 "public-text-check is not on PATH (it ships with the dotfiles, on both desktop profiles and the agent pod)"
+  if public-text-check --repo "$repo" --caller pr-open "$@"; then return 0; else code=$?; fi
+  case $code in 1) refuse 1 "the PR text carries private details (output above); say it in plain words and run pr-open again, nothing was created or changed" ;;
+    *) fail 2 "public-text-check could not run (exit $code, output above)" ;; esac
+}
+
 # The state of the PR to edit, read through `gh api`: sets pr_state, pr_merged and pr_head, and refuses a merged or closed PR, so its description is never overwritten.
 state_guard() {
   pr_info=$(gh api "repos/$repo/pulls/$edit" --jq '.state + " " + (.merged | tostring) + " " + .head.sha') || fail 2 "could not read the state of $repo#$edit. If you meant another repo, pass --repo OWNER/REPO."
@@ -172,16 +180,17 @@ if [ -n "$edit" ]; then
   if [ "$claims" = 1 ]; then
     state_guard
     [ -n "$pr_head" ] || fail 2 "could not read the head commit of $repo#$edit, which the Proven claims are held to"
-    set -- pr-body-check --body-file "$copy" --claims-out "$rendered" --head "$pr_head"
+    set -- pr-body-check --repo "$repo" --body-file "$copy" --claims-out "$rendered" --head "$pr_head"
     [ -z "$title" ] || set -- "$@" --title "$title"
     check "$@"
     post=$rendered
   else
     # the form the hook accepts for an edit: no --pr, so no ledger decisions rule that the raw form never runs. A title being set is passed too, so the check reads it for task ids.
-    if [ -n "$title" ]; then check pr-body-check --body-file "$copy" --title "$title"; else check pr-body-check --body-file "$copy"; fi
+    if [ -n "$title" ]; then check pr-body-check --repo "$repo" --body-file "$copy" --title "$title"; else check pr-body-check --repo "$repo" --body-file "$copy"; fi
     state_guard
     post=$copy
   fi
+  if [ -n "$title" ]; then public_check --title "$title" --file "body=$post"; else public_check --file "body=$post"; fi
   set -- api -X PATCH "repos/$repo/pulls/$edit" -F "body=@$post" --jq .html_url
   [ -z "$title" ] || set -- "$@" -f "title=$title"
   out=$(gh "$@") || fail 2 "gh api could not update the description of $repo#$edit"
@@ -207,10 +216,14 @@ fi
 limits_check "nothing was created" --record-pending   # a PR that is not open has no number, so no record yet
 # The body file is the description source: the check expands its claim tokens into $rendered, and $rendered is what is posted.
 if git rev-parse --verify -q "refs/remotes/origin/$base" >/dev/null; then
-  check pr-body-check --body-file "$copy" --claims-out "$rendered" --base "origin/$base" --title "$title"
+  check pr-body-check --repo "$repo" --body-file "$copy" --claims-out "$rendered" --base "origin/$base" --title "$title"
 else
-  check pr-body-check --body-file "$copy" --claims-out "$rendered" --base "$base" --title "$title"
+  check pr-body-check --repo "$repo" --body-file "$copy" --claims-out "$rendered" --base "$base" --title "$title"
 fi
+
+# The title, the rendered description and the messages of the branch's commits (a squash merge puts them on the main branch) are read before anything is pushed.
+if git rev-parse --verify -q "refs/remotes/origin/$base" >/dev/null; then range="origin/$base..HEAD"; else range="$base..HEAD"; fi
+public_check --title "$title" --file "body=$rendered" --commits "$range"
 
 # The branch's own upstream (origin/<head>) is pushed when it is ahead. A branch cut from origin/main tracks origin/main, so any other upstream is replaced.
 upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null) || upstream=
