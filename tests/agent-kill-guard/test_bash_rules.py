@@ -2175,6 +2175,22 @@ class CheckMustGuard(unittest.TestCase):
         self.assertIsNone(self.comment("%s && %s" % (self.CHECK, self.POST)))
         self.assertIsNone(self.comment("echo a || echo b && %s && %s" % (self.CHECK, self.POST)))
 
+    def test_a_merge_at_the_end_of_a_pipeline_after_the_checks_is_guarded(self):
+        self.assertIsNone(self.merge("%s && %s && echo x | %s" % (self.GATE, self.BODY, self.MERGE)))
+        self.assertIsNotNone(self.merge("%s && echo x | %s" % (self.GATE, self.MERGE)))
+        self.assertIsNotNone(self.merge("%s | %s" % (self.BODY, self.MERGE)))
+
+    def test_the_guard_log_says_why_a_merge_or_comment_was_refused(self):
+        def reason(text, **kw):
+            context = bash_rules.Context(**dict(ctx(**kw)._asdict(), platform="linux"))
+            return bash_rules.refusal(text, context)[1].log["reason"]
+        self.assertEqual(reason(self.MERGE), "no check before the merge")
+        self.assertEqual(reason("! %s && %s && %s" % (self.BODY, self.GATE, self.MERGE)), "a check is written before the merge but does not guard it")
+        self.assertEqual(reason("%s && %s && gh pr merge 6" % (self.GATE, self.BODY)), "the check names another pull request")
+        kw = dict(origins=self.ORIGINS, visibility=lambda repo: "public")
+        self.assertEqual(reason(self.POST, **kw), "comment text not checked for private details")
+        self.assertEqual(reason("! %s && %s" % (self.CHECK, self.POST), **kw), "a check is written before the comment but does not guard it")
+
     def test_the_check_that_is_negated_in_one_place_still_fails_the_chain_in_a_nested_shell(self):
         self.assertIsNotNone(self.merge("%s && sh -c '! %s && %s'" % (self.GATE, self.BODY, self.MERGE)))
 

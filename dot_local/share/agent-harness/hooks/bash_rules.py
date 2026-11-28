@@ -296,9 +296,10 @@ def origin_of(directory):
         return None
 
 
-Cmd = namedtuple("Cmd", "words assigns loop waking gated cwd")
+Cmd = namedtuple("Cmd", "words assigns loop waking gated cwd written", defaults=(False,))  # written: a check command stands earlier in the same text, whether or not it guards this one
 
 
+CHECK_NAMES = ("ci-main-status", "pr-body-check", "public-text-check")  # the commands whose success a guarded command may depend on
 PIPE_JOINS = ("|", "|&")
 CHAIN_JOINS = ("&&", "||") + PIPE_JOINS  # the joins inside one and-or list; every other join (`;`, `&`, a newline, a bracket) starts a new one
 
@@ -307,6 +308,11 @@ def _join(scan, index):
     """The operators between command `index` and the one before it, newlines and spaces dropped."""
     return scan.joins[index].replace("\n", "").strip()
 
+
+def _negated(scan, index):
+    """True when a `!` stands before the command's own words: it runs, or its pipeline runs, with the exit status turned round."""
+    raw = scan.commands[index]
+    return "!" in raw[:len(raw) - len(_command_words(raw))]
 
 
 class Walk:
@@ -347,7 +353,8 @@ class Walk:
             assigns = tuple(w for w in raw[:len(raw) - len(words)] if ASSIGN.match(w))
             here = gated | self._and_listed(scan, index)
             polling = loop or any(loops)
-            self._command(words, assigns, polling, waking, here, cwd, depth, scan, index)
+            written = any(_base(w[0]) in CHECK_NAMES for w in map(_command_words, scan.commands[:index]) if w)
+            self._command(words, assigns, polling, waking, here, cwd, depth, scan, index, written)
             if _base(words[0]) in ("cd", "pushd"):
                 target = next((w for w in words[1:] if w != "--" and not w.startswith("-")), None)
                 cwd = _resolve(target, cwd, self.home)
@@ -377,7 +384,7 @@ class Walk:
             while last + 1 < first and _join(scan, last + 1) in PIPE_JOINS:
                 last += 1
             joined = _join(scan, at) if at > start else None
-            negated = any("!" in scan.commands[k][:len(scan.commands[k]) - len(_command_words(scan.commands[k]))] for k in range(at, last + 1))
+            negated = any(_negated(scan, k) for k in range(at, last + 1))
             checks = set() if negated else Walk._checks(_command_words(scan.commands[last]))
             passed = checks if joined is None else (passed | checks if joined == "&&" else set())
             at = last + 1
@@ -416,8 +423,8 @@ class Walk:
                     found.add(BODY_PAIR + body_file + "\0" + title)  # one check saw both, not a file from one check and a title from another
         return found
 
-    def _command(self, words, assigns, loop, waking, gated, cwd, depth, scan=None, index=None):
-        self.cmds.append(Cmd(words, assigns, loop, waking, gated, cwd))
+    def _command(self, words, assigns, loop, waking, gated, cwd, depth, scan=None, index=None, written=False):
+        self.cmds.append(Cmd(words, assigns, loop, waking, gated, cwd, written))
         name, rest = _base(words[0]), words[1:]
         if "kgate" in [_base(w) for w in rest]:
             rest = rest[:[_base(w) for w in rest].index("kgate")]  # what follows runs on the cluster, not here
@@ -869,16 +876,24 @@ def merge_rule(walk, ctx):
         if repo is None:
             repo = (ctx.origin_of or origin_of)(cmd.cwd)
         if repo and HOMELAB_REPO.search(repo):
-            return MERGE_HOMELAB  # before the gates: the chained form skips the homelab RED-line check, so it is no way through
+            return _merge_refusal(MERGE_HOMELAB, "homelab merge goes through its merge script")  # before the gates: the chained form skips the homelab RED-line check, so it is no way through
         checked = {e[len(PR_CHECK):] for e in cmd.gated if e.startswith(PR_CHECK)}
         if CI_GATE not in cmd.gated or not checked:
-            return MERGE_BARE.replace(MERGE_PR, _merge_pr(ctx))
+            return _merge_refusal(MERGE_BARE.replace(MERGE_PR, _merge_pr(ctx)),
+                                  "a check is written before the merge but does not guard it" if cmd.written else "no check before the merge")
         merged = _pr_number(gh)  # None when it names a branch or no PR: the hook cannot see which
         if merged and str(int(merged)) not in checked:
-            return MERGE_OTHER_PR % (" and ".join(sorted(checked, key=int)), merged) + MERGE_BARE.replace(MERGE_PR, _merge_pr(ctx))
+            return _merge_refusal(MERGE_OTHER_PR % (" and ".join(sorted(checked, key=int)), merged) + MERGE_BARE.replace(MERGE_PR, _merge_pr(ctx)), "the check names another pull request")
         if repo and COORDINATOR.search(repo):
-            return MERGE_COORDINATOR.replace(MERGE_PR, _merge_pr(ctx))
+            return _merge_refusal(MERGE_COORDINATOR.replace(MERGE_PR, _merge_pr(ctx)), "coordinator merge goes through its merge script")
     return None
+
+
+def _merge_refusal(message, reason):
+    """A merge refusal with the reason the guard log writes beside the rule name."""
+    refusal = Matched(message, "gh pr merge")
+    refusal.log = {"reason": reason}
+    return refusal
 
 
 def _pr_number(gh):
@@ -1120,7 +1135,7 @@ def public_comment_rule(walk, ctx):
         if body_file not in (None, "-") and inline is None and PUBLIC_FILE + body_file + "\0" + (repo or "").lower() in cmd.gated:
             continue
         message = Matched(PUBLIC_COMMENT % (gh.group, gh.verb, repo or "OWNER/REPO", gh.group, gh.verb), "gh " + command)
-        message.log = {"reason": "comment text not checked for private details", "command": "gh " + command}
+        message.log = {"reason": "a check is written before the comment but does not guard it" if cmd.written else "comment text not checked for private details", "command": "gh " + command}
         return message
     return None
 
