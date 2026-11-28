@@ -27,7 +27,7 @@ The steps, and the step a stop names (the same shape as loop_engine_bump.py):
   verify   the version of @cartwmic/agent-kit installed under ~/.local/share/agent-kit is X.Y.Z
 
 --pr N is for two releases that land close together: it puts both pins in one PR. Separate bump PRs also work, because
-check-release-pins.py passes a lagging pin while an open dotfiles PR bumps it to exactly the latest release. To use --pr N, open
+check-release-pins.py judges a PR only on the pins it changes and does not fail a PR for a pin that lags. To use --pr N, open
 loop_engine_bump.py's PR, then run this with --pr N on it, so one PR carries both pins. Run the Loop Engine bump on that PR too
 (it ignores the two agent-kit files). The push restarts the PR's checks. Do not run both scripts at
 once on the same PR: each merges it.

@@ -429,8 +429,8 @@ command with a copy of that config without hooks, so no configured chezmoi hook 
 rerun resumes the PR, and a version already pinned does nothing. When two releases land close together, you can put both pins in one
 PR: open this PR, then run `~/.local/user_scripts/agent_kit_bump.py X.Y.Z --pr N` on it, which commits the two agent-kit pin
 files there. Each script then applies only its own files from the merged PR and ignores the other's. Separate bump PRs do not
-block each other either: `scripts/check-release-pins.py` passes a lagging pin while an open dotfiles PR bumps it to exactly the
-latest release, and prints `pending bump #N` for it. Orphans stay a person's call (`--prune` below). It
+block each other either: on a pull request `scripts/check-release-pins.py` judges only the pins that PR changes, and on main a
+lagging pin opens one `pin-lag` issue instead of turning the run red. Orphans stay a person's call (`--prune` below). It
 refuses on any profile but personal and is not deployed on the others: the work Mac takes the merged pins with its own
 `chezmoi update`.
 
