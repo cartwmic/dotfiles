@@ -8,6 +8,7 @@ The agent guard rails (the PR gates, the review log and the Bash rules) land on 
 | Agent record path and import: `pr-record` | yes | yes | `.local/bin/pr-record` | `tests/pr-record/test_pr_record.py`, `tests/profiles/test_gate_coverage.py` |
 | Open or edit a PR through the body check: `pr-open` | yes | yes | `.local/bin/pr-open` | `tests/pr-open/test_pr_open.py`, `tests/profiles/test_gate_coverage.py` |
 | Redact a merged or closed PR's description by exact replacement only: `pr-redact` | yes | yes | `.local/bin/pr-redact` | `tests/pr-redact/test_pr_redact.py`, `tests/profiles/test_gate_coverage.py` |
+| Refuse new public text that carries a private detail: `public-text-check`, called by `pr-open`, `issue-open`, the merge form of `pr-body-check` and the comment rule in `bash_rules.py` | yes | yes | `.local/bin/public-text-check`, `.local/share/agent-harness/public-text-classes.json` | `tests/public-text-check/test_public_text_check.py`, `tests/profiles/test_gate_coverage.py` |
 | Open an issue through the claims check: `issue-open` | yes | yes | `.local/bin/issue-open`, `.local/bin/claims` | `tests/issue-open/test_issue_open.py`, `tests/profiles/test_gate_coverage.py` |
 | Review-record merge rule: `intent-review-check` | yes | yes | `.local/bin/intent-review-check` | `tests/intent-review-check/test_intent_review_check.py`, `tests/profiles/test_gate_coverage.py` |
 | Merge gate: `ci-main-status --merge-gate` | yes | yes | `.local/bin/ci-main-status` | `tests/ci-main-status/test_ci_main_status.py`, `tests/profiles/test_gate_coverage.py` |

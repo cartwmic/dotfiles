@@ -26,6 +26,22 @@ printf 'GH_CALLER=%s\n' "$GH_CALLER" >> "$FAKE_LOG"
 echo "${FAKE_GH_OUT-https://github.com/cartwmic/scratch/issues/9}"
 '''
 
+FAKE_PUBLIC_TEXT_CHECK = r'''#!/bin/sh
+# Stands in for public-text-check: records its arguments in $FAKE_PTC_LOG (none by default), exits as FAKE_PTC_EXIT says, and refuses a title or a body file that holds PRIVATEME.
+log=${FAKE_PTC_LOG:-/dev/null}
+printf 'public-text-check' >> "$log"; for a in "$@"; do printf ' [%s]' "$a" >> "$log"; done; printf '\n' >> "$log"
+[ -z "${FAKE_PTC_EXIT-}" ] || { echo "fake public-text-check said: no" >&2; exit "$FAKE_PTC_EXIT"; }
+prev=
+for a in "$@"; do
+  case $prev in
+    --file) f=${a#*=}; if grep -q PRIVATEME "$f"; then echo "  body:1: owner name" >&2; exit 1; fi ;;
+    --title) case $a in *PRIVATEME*) echo "  title:1: owner name" >&2; exit 1 ;; esac ;;
+  esac
+  prev=$a
+done
+exit 0
+'''
+
 FAKE_CLAIMS = r'''#!/bin/sh
 printf 'claims' >> "$FAKE_LOG"; for a in "$@"; do printf ' [%s]' "$a" >> "$FAKE_LOG"; done; printf '\n' >> "$FAKE_LOG"
 [ "$1" = expand ] || exit 2
@@ -42,7 +58,7 @@ class IssueOpen(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.dir, True)
         self.bin = self.dir / "bin"
         self.bin.mkdir()
-        for name, text in (("gh", FAKE_GH), ("claims", FAKE_CLAIMS)):
+        for name, text in (("gh", FAKE_GH), ("claims", FAKE_CLAIMS), ("public-text-check", FAKE_PUBLIC_TEXT_CHECK)):
             (self.bin / name).write_text(text, encoding="utf-8")
             (self.bin / name).chmod(0o755)
         self.log = self.dir / "calls.log"
@@ -119,6 +135,24 @@ class IssueOpen(unittest.TestCase):
         r = self.run_it("--title", "t", "--body-file", str(self.body), "--repo", "cartwmic/scratch", env_extra={"CLAIMS": "no-such-claims"})
         self.assertEqual(r.returncode, 2)
         self.assertIn("no-such-claims is not on PATH", r.stderr)
+        self.assertEqual([c for c in self.calls() if c.startswith("gh")], [])
+
+    def test_the_title_and_the_expanded_body_are_read_for_private_details_and_a_refusal_creates_nothing(self):
+        r = self.run_it("--title", "t", "--body-file", str(self.body), "--repo", "cartwmic/scratch", env_extra={"FAKE_PTC_LOG": str(self.dir / "ptc.log")})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertRegex((self.dir / "ptc.log").read_text(), r"^public-text-check \[--repo\] \[cartwmic/scratch\] \[--caller\] \[issue-open\] \[--title\] \[t\] \[--file\] \[body=[^\]]*issue-open-expanded[^\]]*\]\n$")
+        for title, text, extra in (("PRIVATEME", "clean {{claim:aaaaaaaaaaaaaaaa}}\n", ()), ("t", "PRIVATEME {{claim:aaaaaaaaaaaaaaaa}}\n", ("--dry-run",))):
+            self.body.write_text(text)
+            before = len([c for c in self.calls() if c.startswith("gh")])
+            r = self.run_it("--title", title, "--body-file", str(self.body), "--repo", "cartwmic/scratch", *extra)
+            self.assertEqual(r.returncode, 1, title)
+            self.assertIn("carries private details", r.stderr)
+            self.assertEqual(len([c for c in self.calls() if c.startswith("gh")]), before)  # nothing created, and a dry run refuses too
+
+    def test_a_public_text_check_that_cannot_run_creates_nothing(self):
+        r = self.run_it("--title", "t", "--body-file", str(self.body), "--repo", "cartwmic/scratch", env_extra={"FAKE_PTC_EXIT": "2"})
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("public-text-check could not run", r.stderr)
         self.assertEqual([c for c in self.calls() if c.startswith("gh")], [])
 
     def test_dry_run_prints_the_expanded_body_and_the_command_and_creates_nothing(self):

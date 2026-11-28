@@ -148,6 +148,7 @@ PR_CHECK = "pr-body-check PR "           # prefix of the gated entry for a real 
 BODY_FILE = "pr-body-check --body-file "  # prefix of the gated entry that names a file the body check already read
 BODY_TITLE = "pr-body-check --title "  # prefix of the gated entry that names a title a body check already read
 BODY_PAIR = "pr-body-check --body-file+title "  # prefix of the gated entry for one check that read both a file and a title: BODY_PAIR + F + "\0" + T
+PUBLIC_FILE = "public-text-check --file comment="  # prefix of the gated entry for a comment file that public-text-check already read: PUBLIC_FILE + F + "\0" + the lower-case repo it was given
 MERGE_BARE = (
     "`gh pr merge` without both gates in their real form is refused in agent sessions: it skips the red-main gate (playbook fab9b713) or the PR body check. "
     "A bare `ci-main-status` (or `--tip`) is not the gate, and a `pr-body-check` with `--body-file` is not the merge check: only `pr-body-check <repo> <pr>` reads the PR's head runs. "
@@ -266,7 +267,7 @@ def kube_message(what, fix):
     )
 
 
-Context = namedtuple("Context", "tool profile env cwd read_file origin_of platform container coordinator_repo run door note", defaults=(None,) * 12)  # note(rule, matched, extra): the caller writes one log line for an allowed use of a way past
+Context = namedtuple("Context", "tool profile env cwd read_file origin_of platform container coordinator_repo run door note visibility", defaults=(None,) * 13)  # note(rule, matched, extra): the caller writes one log line for an allowed use of a way past
 
 
 def read_file(path):
@@ -357,6 +358,13 @@ class Walk:
             if not earlier:
                 continue
             name, args = _base(earlier[0]), earlier[1:]
+            if name == "public-text-check":
+                read = normalise([("public-text-check", "")], args)
+                if not read.unknown and not read.has("visibility"):  # --visibility reads no text, so it checks nothing
+                    for spec in read.values("file"):
+                        surface, _, path = spec.partition("=")
+                        if surface == "comment" and path:
+                            found.add(PUBLIC_FILE + path + "\0" + (read.value("repo") or "").lower())
             if name == "ci-main-status" and _is_merge_gate(args):
                 found.add(CI_GATE)
             elif name == "pr-body-check":
@@ -476,9 +484,13 @@ FLAG_ROWS = {
     ("issue", "edit"): "add-assignee=,add-blocked-by=,add-blocking=,add-label=,add-project=,add-sub-issue=,attach=,b:body=,F:body-file=,m:milestone=,parent=,remove-assignee=,remove-blocked-by=,remove-blocking=,remove-label=,remove-milestone,remove-parent,remove-project=,remove-sub-issue=,remove-type,t:title=,type=,h:help,R:repo=",
     ("pr", "create"): "a:assignee=,attach=,B:base=,b:body=,F:body-file=,d:draft,dry-run,e:editor,f:fill,fill-first,fill-verbose,H:head=,l:label=,m:milestone=,no-maintainer-edit,p:project=,recover=,r:reviewer=,T:template=,t:title=,w:web,h:help,R:repo=",
     ("pr", "edit"): "add-assignee=,add-label=,add-project=,add-reviewer=,attach=,B:base=,b:body=,F:body-file=,m:milestone=,remove-assignee=,remove-label=,remove-milestone,remove-project=,remove-reviewer=,t:title=,h:help,R:repo=",
+    ("pr", "comment"): "attach=,b:body=,F:body-file=,create-if-none,delete-last,edit-last,e:editor,w:web,yes,h:help,R:repo=",
+    ("pr", "review"): "a:approve,b:body=,F:body-file=,c:comment,r:request-changes,h:help,R:repo=",
+    ("issue", "comment"): "attach=,b:body=,F:body-file=,create-if-none,delete-last,edit-last,e:editor,w:web,yes,h:help,R:repo=",
+    ("public-text-check", ""): "repo=,title=,file=,commits=,git-dir=,pr=,caller=,visibility,help",  # a python script: long flags only
     ("pr", "merge"): "admin,A:author-email=,auto,b:body=,F:body-file=,d:delete-branch,disable-auto,match-head-commit=,m:merge,r:rebase,s:squash,t:subject=,h:help,R:repo=",
     ("api", ""): "allow-escape-sequences,cache=,F:field=,H:header=,hostname=,i:include,input=,q:jq=,X:method=,paginate,p:preview=,f:raw-field=,silent,slurp,t:template=,verbose,h:help",
-    ("pr-body-check", ""): "body-file=,commits-file=,diff-file=,files-file=,pr=,repo=,base=,skip-intent-review,title=,owner-approved=",  # a node script: long flags only (node parseArgs)
+    ("pr-body-check", ""): "body-file=,claims-out=,commits-file=,diff-file=,files-file=,head=,pr=,repo=,base=,skip-intent-review,title=,owner-approved=",  # a node script: long flags only (node parseArgs)
     ("git", ""): "C:=,c:=,git-dir=,work-tree=,namespace=,super-prefix=,config-env=,exec-path?,html-path,man-path,info-path,p:paginate,P:no-pager,no-replace-objects,bare,"
                  "literal-pathspecs,glob-pathspecs,noglob-pathspecs,icase-pathspecs,no-optional-locks,no-lazy-fetch,list-cmds=,v:version,h:help",
     ("git", "merge"): "n:,stat,summary,log?,squash,commit,e:edit,cleanup=,ff,ff-only,rerere-autoupdate,verify-signatures,s:strategy=,X:strategy-option=,m:message=,F:file=,"
@@ -1026,6 +1038,57 @@ def _title_refusal(verb, title, message=None):
     return refusal
 
 
+PUBLIC_COMMENT = (
+    "`gh %s %s` with text posts it publicly where the repository is public or its visibility cannot be read, and nothing has checked this text for private details (home paths, host and user names, ids, "
+    "the owner's name). Write it to a file made by mktemp, check the file, and post from it: `public-text-check --repo %s --file comment=F && gh %s %s ... --body-file F`. "
+    "The check names the class and the line of each hit and never prints the text; a false hit passes with PUBLIC_TEXT_SKIP=\"reason\" in front of it, and each use is logged and counted.")
+COMMENT_VERBS = (("pr", "comment"), ("issue", "comment"), ("pr", "review"))
+
+
+def _repo_of(url):
+    """OWNER/REPO from a git remote URL (https or scp form), else None."""
+    found = re.search(r"[:/]([^/:\s]+)/([^/\s]+?)(?:\.git)?/?$", url or "")
+    return "%s/%s" % found.groups() if found else None
+
+
+def _visibility(ctx, repo):
+    """`private`, `public` or `unknown` for OWNER/REPO: asked of `public-text-check --visibility`, the one place that decides it. ctx.visibility replaces the call in tests."""
+    if ctx.visibility is not None:
+        return ctx.visibility(repo)
+    try:
+        run = subprocess.run(["public-text-check", "--repo", repo, "--visibility"], capture_output=True, text=True, timeout=15, stdin=subprocess.DEVNULL)
+        return run.stdout.strip() if run.returncode == 0 and run.stdout.strip() in ("private", "public") else "unknown"
+    except Exception:
+        return "unknown"
+
+
+def public_comment_rule(walk, ctx):
+    """A comment or review that carries text must have been through `public-text-check` in the same and-list, unless its repository is known to be private."""
+    if ctx.profile not in GATE_PROFILES:
+        return None
+    for cmd in walk.cmds:
+        gh = gh_command(cmd.words[1:]) if _base(cmd.words[0]) == "gh" else None
+        if gh is None or (gh.group, gh.verb) not in COMMENT_VERBS:
+            continue
+        command = "%s %s" % (gh.group, gh.verb)
+        refused = _unknown_refusal("gh " + command, gh.argv, command)
+        if refused:
+            return refused
+        body_file, inline = gh.argv.value("body-file"), gh.argv.value("body")
+        if body_file is None and inline is None:
+            continue  # an approval, a reaction or an edit in an editor carries no text here
+        link = re.match(r"https?://[^/]+/([^/\s]+/[^/\s]+)/(?:pull|issues)/\d+", gh.operands[0]) if gh.operands else None
+        repo = (link.group(1) if link else None) or gh.argv.value("repo") or _repo_of((ctx.origin_of or origin_of)(cmd.cwd or ctx.cwd))  # a URL names the repository gh posts to, whatever the checkout is
+        if repo and _visibility(ctx, repo) == "private":
+            continue
+        if body_file not in (None, "-") and inline is None and PUBLIC_FILE + body_file + "\0" + (repo or "").lower() in cmd.gated:
+            continue
+        message = Matched(PUBLIC_COMMENT % (gh.group, gh.verb, repo or "OWNER/REPO", gh.group, gh.verb), "gh " + command)
+        message.log = {"reason": "comment text not checked for private details", "command": "gh " + command}
+        return message
+    return None
+
+
 def _docker_spelling(words):
     """(the refused docker command in words (`docker run`, `docker compose up`, ...) or None, the first flag before the subcommand that the table does not list or None).
     Only the subcommand position counts: the options before it are read by the normaliser, so `docker -H host run`, `docker -Hhost run` and `docker compose -f f up` find it."""
@@ -1524,7 +1587,7 @@ def bash_engine_rule(walk, ctx):
     return None
 
 
-RULES = (poll_rule, heredoc_rule, kube_rule, merge_rule, pr_body_rule, issue_body_rule, docker_rule, heavy_rule, stash_rule, live_git_rule, credential_rule, bash_engine_rule, door_rule)
+RULES = (poll_rule, heredoc_rule, kube_rule, merge_rule, pr_body_rule, issue_body_rule, public_comment_rule, docker_rule, heavy_rule, stash_rule, live_git_rule, credential_rule, bash_engine_rule, door_rule)
 
 
 def refusal(text, ctx):

@@ -26,11 +26,11 @@ KUBE = {"/kc/homelab": "current-context: %s\n" % HOMELAB, "/kc/other": "apiVersi
         "/kc/none": "apiVersion: v1\ncontexts: []\n"}
 
 
-def ctx(profile="personal", tool="Bash", env=None, cwd="/work", files=None, origins=None, container=False, coordinator_repo=None):
+def ctx(profile="personal", tool="Bash", env=None, cwd="/work", files=None, origins=None, container=False, coordinator_repo=None, visibility=None):
     files = KUBE if files is None else files
     origins = origins or {}
     return bash_rules.Context(tool=tool, profile=profile, env=env or {}, cwd=cwd, read_file=files.get,
-                              origin_of=lambda directory: origins.get(directory), container=container, coordinator_repo=coordinator_repo)
+                              origin_of=lambda directory: origins.get(directory), container=container, coordinator_repo=coordinator_repo, visibility=visibility)
 
 
 def check(text, platform="linux", **kw):
@@ -557,7 +557,7 @@ class IssueBody(unittest.TestCase):
                "gh issue create --repo cartwmic/x --title t --body-file /tmp/b.md --label bug", "cd /tmp && gh issue create --title t", "echo x | gh issue create --title t --body-file -",
                "sh -c 'gh issue create --title t'", "sudo gh issue create --title t", "gh api repos/cartwmic/x/issues -f title=t -f body=b", "gh api -X POST repos/cartwmic/x/issues --input /tmp/i.json",
                "gh api --method=POST https://api.github.com/repos/cartwmic/x/issues -F title=t"]
-    PASSES = ["gh issue edit 5 --body-file /tmp/b.md", "gh issue comment 5 --body hi", "gh issue list", "gh issue view 5", "gh issue close 5", "gh issue status",
+    PASSES = ["gh issue edit 5 --body-file /tmp/b.md", "gh issue comment 5", "gh issue list", "gh issue view 5", "gh issue close 5", "gh issue status",
               "issue-open --title t --body-file /tmp/b.md", "issue-open --title t --body-file - --dry-run", "echo gh issue create", "grep 'gh issue create' notes.md",
               "gh api repos/cartwmic/x/issues", "gh api repos/cartwmic/x/issues/5/comments -f body=hi", "gh api -X GET repos/cartwmic/x/issues -f labels=bug", "gh pr list"]
 
@@ -621,6 +621,76 @@ class IssueBody(unittest.TestCase):
         self.assertEqual(found[2], "gh issue create")
         api = bash_rules.refusal("gh api repos/cartwmic/x/issues -f title=SECRETVALUE", bash_rules.Context(**dict(ctx(coordinator_repo=self.repo)._asdict(), platform="linux")))
         self.assertNotIn("SECRETVALUE", json.dumps(api[1].log))
+
+
+class PublicComment(unittest.TestCase):
+    """A comment or review that carries text goes through `public-text-check` first, unless its repository is known to be private."""
+    ORIGINS = {"/work": "https://github.com/cartwmic/dotfiles.git"}
+    F = "/tmp/comment.aB3xY9"
+
+    def comment(self, text, visible="public", **kw):
+        asked = []
+        message = check(text, origins=self.ORIGINS, visibility=lambda repo: asked.append(repo) or visible, **kw)
+        return message, asked
+
+    def test_text_posted_without_the_check_is_refused_and_names_the_check(self):
+        for text in ("gh pr comment 5 --body hi", "gh issue comment 5 -b hi", "gh pr review 5 --comment --body hi", "gh pr comment 5 --body-file %s" % self.F,
+                     "gh pr comment 5 --body-file - < /tmp/x", "sh -c 'gh issue comment 5 --body hi'", "gh -R cartwmic/x pr comment 5 --body hi"):
+            with self.subTest(text=text):
+                message, _ = self.comment(text)
+                self.assertIn("public-text-check --repo", message or "")
+                self.assertIn("PUBLIC_TEXT_SKIP", message)
+
+    def test_a_check_of_that_file_for_that_repository_earlier_in_the_and_list_passes(self):
+        for text in ("public-text-check --repo cartwmic/dotfiles --file comment=%s && gh pr comment 5 --body-file %s" % (self.F, self.F),
+                     "public-text-check --repo=cartwmic/x --file comment=%s && gh issue comment 5 --repo cartwmic/x --body-file %s" % (self.F, self.F),
+                     "PUBLIC_TEXT_SKIP=x public-text-check --repo cartwmic/dotfiles --file comment=%s && gh pr review 5 --body-file %s" % (self.F, self.F)):
+            with self.subTest(text=text):
+                self.assertIsNone(self.comment(text)[0])
+
+    def test_a_check_of_another_file_or_another_repository_or_a_body_surface_does_not_count(self):
+        for text in ("public-text-check --repo cartwmic/dotfiles --file comment=/tmp/other && gh pr comment 5 --body-file %s" % self.F,
+                     "public-text-check --repo cartwmic/x --file comment=%s && gh pr comment 5 --body-file %s" % (self.F, self.F),
+                     "public-text-check --repo cartwmic/dotfiles --file body=%s && gh pr comment 5 --body-file %s" % (self.F, self.F),
+                     "public-text-check --repo cartwmic/dotfiles --file comment=%s ; gh pr comment 5 --body-file %s" % (self.F, self.F),
+                     "public-text-check --repo cartwmic/dotfiles --file comment=%s || gh pr comment 5 --body-file %s" % (self.F, self.F)):
+            with self.subTest(text=text):
+                self.assertIsNotNone(self.comment(text)[0])
+
+    def test_a_url_names_the_repository_whatever_the_checkout_is(self):
+        message, asked = self.comment("gh pr comment https://github.com/someone/else/pull/5 --body hi", visible="public")
+        self.assertIsNotNone(message)
+        self.assertEqual(asked, ["someone/else"])
+        message, asked = self.comment("gh issue comment https://github.com/someone/else/issues/5 --body hi", visible="private")
+        self.assertEqual((message, asked), (None, ["someone/else"]))
+        checked = "public-text-check --repo someone/else --file comment=%s && gh pr comment https://github.com/someone/else/pull/5 --body-file %s" % (self.F, self.F)
+        self.assertIsNone(self.comment(checked)[0])
+
+    def test_a_visibility_query_is_not_a_check_of_the_file(self):
+        text = "public-text-check --repo cartwmic/dotfiles --visibility --file comment=%s && gh pr comment 5 --body-file %s" % (self.F, self.F)
+        self.assertIsNotNone(self.comment(text)[0])
+
+    def test_a_private_repository_is_not_refused_and_an_unknown_one_is(self):
+        self.assertIsNone(self.comment("gh pr comment 5 --body hi", visible="private")[0])
+        self.assertIsNotNone(self.comment("gh pr comment 5 --body hi", visible="unknown")[0])
+        message, asked = self.comment("gh -R cartwmic/x issue comment 5 --body hi", visible="private")
+        self.assertEqual((message, asked), (None, ["cartwmic/x"]))
+
+    def test_a_command_that_posts_no_text_or_is_not_a_comment_passes(self):
+        for text in ("gh pr review 5 --approve", "gh pr comment 5 --edit-last", "gh pr view 5", "gh pr list", "echo gh pr comment 5 --body hi", "gh issue comment 5"):
+            with self.subTest(text=text):
+                self.assertIsNone(self.comment(text)[0])
+
+    def test_an_unknown_flag_is_refused_and_a_repo_that_cannot_be_told_is_refused(self):
+        self.assertIn("--frobnicate", self.comment("gh pr comment 5 --frobnicate --body hi")[0])
+        message = check("gh pr comment 5 --body hi", visibility=lambda repo: "public")  # no origin known here, no -R
+        self.assertIsNotNone(message)
+
+    def test_it_runs_where_the_other_gates_run_and_nowhere_else(self):
+        for profile in ("personal", "axon-work-computer"):
+            self.assertIsNotNone(self.comment("gh pr comment 5 --body hi", profile=profile)[0])
+        for profile in ("termux", None):
+            self.assertIsNone(self.comment("gh pr comment 5 --body hi", profile=profile)[0])
 
 
 class IssueBodyRealHook(unittest.TestCase):

@@ -1,0 +1,43 @@
+{
+  "classes": [
+    {
+      "name": "home path",
+      "pattern": "/(?:home|Users)/(?!(?:alice|bob|you|user|username|example|me|name)(?![A-Za-z0-9_.-]))[A-Za-z0-9_.-]+|/root(?=/|\\b)"
+    },
+    {
+      "name": "private address",
+      "pattern": "\\b(?:10\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}|192\\.168\\.\\d{1,3}\\.\\d{1,3}|172\\.(?:1[6-9]|2\\d|3[01])\\.\\d{1,3}\\.\\d{1,3})\\b"
+    },
+    {
+      "name": "internal host name",
+      "pattern": "\\b[a-z0-9-]+(?:\\.[a-z0-9-]+)*\\.internal\\.[a-z0-9.-]+\\b|\\b[a-z0-9-]+\\.(?:lan|home\\.arpa|cluster\\.local)\\b"
+    },
+    {
+      "name": "host or pod name",
+      "pattern": "\\b[a-z][a-z0-9]*(?:-[a-z0-9]+)*-(?=[0-9a-f]*[a-f])[0-9a-f]{8,10}-(?=[a-z0-9]*[a-z])[a-z0-9]{5}\\b|\\bnode=[A-Za-z0-9_.-]+"
+    },
+    {
+      "name": "runner log line",
+      "pattern": "^\\s*kgate(?:\\[[^\\]]*\\])?: |kgate: control plane (?!user@address)\\S+",
+      "surfaces": [
+        "body"
+      ]
+    },
+    {
+      "name": "user name",
+      "pattern": "\\buser[=:]\\s*(?:agent|root|ubuntu|admin)\\b|\\buser (?:agent|root|ubuntu|admin), cwd\\b|\\bUSER=\\w+"
+    },
+    {
+      "name": "session folder",
+      "pattern": "\\.t3/scratch\\S*|\\.claude/projects/-\\S+|\\.local/share/coordinator\\b|\\bworkstreams/[a-z0-9][a-z0-9-]*|\\b20\\d\\d-\\d\\d-\\d\\d-[a-z0-9-]+-[0-9a-f]{8}\\b"
+    },
+    {
+      "name": "ledger or rule id",
+      "pattern": "\\b(?:ask|decision|retro)s?\\s*#\\s*\\d{2,6}\\b|\\brule\\s+[0-9a-f]{8}\\b"
+    },
+    {
+      "name": "email address or secret reference",
+      "pattern": "\\bop://[A-Za-z0-9_-]+/\\S|\\b(?!git@)[\\w.+-]+@(?!address\\b|example\\.|users\\.noreply\\.github\\.com\\b|anthropic\\.com\\b)[\\w-]+\\.[\\w.-]+\\b"
+    }
+  ]
+}

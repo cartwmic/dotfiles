@@ -189,6 +189,11 @@ class Tables(unittest.TestCase):
         row = {t.rstrip("="): t.endswith("=") for t in bash_rules.FLAG_ROWS[("pr-body-check", "")].split(",")}
         self.assertEqual(row, {name: kind == "string" for name, kind in options.items()})
 
+    def test_the_pr_body_check_row_lists_the_flags_pr_open_passes(self):
+        read = bash_rules.normalise([("pr-body-check", "")], ["--repo", "o/r", "--body-file", "F", "--claims-out", "R", "--head", "abc", "--base", "origin/main", "--title", "T"])
+        self.assertEqual(read.unknown, [])
+        self.assertEqual((read.value("claims-out"), read.value("head"), read.value("repo")), ("R", "abc", "o/r"))
+
     def test_every_row_parses(self):
         for key, row in bash_rules.FLAG_ROWS.items():
             with self.subTest(row=key):
@@ -203,6 +208,7 @@ class Guard(unittest.TestCase):
     ALLOWED = {
         "origin_of": "builds the git command it runs",
         "_command": "reads find's -exec: an expression word, not an option",
+        "_visibility": "builds the public-text-check command it runs",
     }
     FLAG = re.compile(r"--?[A-Za-z][\w-]*(=.*)?")
 
