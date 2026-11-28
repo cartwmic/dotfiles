@@ -123,6 +123,14 @@ class CiParTest(unittest.TestCase):
         self.assertIn("does not hold", out)
         self.assertEqual(ran, [], "a stale --hold must stop the run, not run the tests it failed to leave out")
 
+    def test_the_selection_is_printed_with_the_listed_count_the_held_count_and_each_parts_size(self):
+        ids = self.marking_dir()
+        rc, out, _ = self.run_marking("--shards", "2", "five")
+        self.assertIn("five: 5 ids, 0 held, the other 5 dealt round-robin to 2 parts: 3, 2\n", out)
+        self.marks.unlink()
+        rc, out, _ = self.run_marking("--shards", "2", "five", "--hold", ids[2])
+        self.assertIn("five: 5 ids, 1 held, the other 4 dealt round-robin to 2 parts: 2, 2\n", out)
+
     def test_a_failing_test_in_a_shard_exits_one_and_is_named(self):
         rc, out = self.run_runner("--shards", "2", "many")
         self.assertEqual(rc, 1, out)

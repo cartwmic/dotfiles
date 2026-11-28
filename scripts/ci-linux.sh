@@ -1,7 +1,7 @@
 #!/bin/sh
 # Linux checks for this repo, the same command the CI `tests` job runs: the six node tests, then every
 # Linux Python suite through scripts/ci-par.py (tests/heavy-gate one test per process, the rest one
-# discover process per suite), then tests/kgate in four processes and tests/pi-mcp-lazy, each with its one timing-bound test run alone.
+# discover process per suite), then tests/kgate in four processes and tests/pi-mcp-lazy, each with its one timing-bound test kept out of the pool load.
 #
 # Installs nothing. It assumes these are on PATH: chezmoi (the render tests), zsh, lsof and rsync (the
 # agent-scratch, zshenv and agent-docker tests), node, and python3 (3.14). tests/omarchy-remote-unlock also
@@ -150,10 +150,10 @@ python3 scripts/ci-par.py \
 # tests/kgate and tests/pi-mcp-lazy run after the pool, not in it: each has a timing-bound test (test_a_quota_that_never_frees_is_69_at_the_deadline_with_the_message
 # in kgate, test_second_stop_still_reaches_a_helper_reparented_by_the_first in pi-mcp-lazy) that fails under pool load.
 # First those two tests, as two processes at once: kgate's one test, and all of pi-mcp-lazy. Each streams into its own log file. The
-# files stay on disk, so a hang or a cancel still leaves what each one printed. Then the other 611 kgate tests, in four processes
+# files stay on disk, so a hang or a cancel still leaves what each one printed. Then the rest of the kgate tests, in four processes
 # (every fourth test id to each: the slow ones spread), their counts summed in ci-par's "suite counts". kgate's tests start from a
 # script rendered through chezmoi when their module is imported: render it once here and share it through KGATE_SCRIPT, not
-# once per process. A value already set stays. Both logs print in full, kgate's first, once all of it has finished.
+# once per process (test_report and test_prune still render their own copy). A value already set stays. Both logs print in full, kgate's first, once all of it has finished.
 if [ -z "${KGATE_SCRIPT:-}" ]; then
   KGATE_SCRIPT=$(python3 -c 'import sys; sys.path.insert(0, "tests/kgate"); import test_kgate; print(test_kgate.SCRIPT)')
   export KGATE_SCRIPT
