@@ -25,6 +25,13 @@ fi
 if [ "$merge_form" = 1 ]; then
   case "$1" in cartwmic/dotfiles|dotfiles) stack-map-merge-check "$1" "$2" || exit $? ;; esac
 fi
+# The merge form also reads the title, the description and the commit messages of the PR for private details (public-text-check, docs/public-text-check.md): they are what a squash merge
+# puts on the main branch. A private repository is not checked (public-text-check decides that). A missing public-text-check is a failure (exit 127), never a skip.
+if [ "$merge_form" = 1 ]; then
+  case "$1" in */*) pt_repo=$1 ;; *) pt_repo=cartwmic/$1 ;; esac
+  command -v public-text-check >/dev/null 2>&1 || { echo "pr-body-check: public-text-check is not on PATH (it ships with the dotfiles): apply them" >&2; exit 127; }
+  public-text-check --repo "$pt_repo" --pr "$2" --caller pr-body-check || exit $?
+fi
 # The coordinator checkout: COORDINATOR_REPO, else line 1 of ~/.local/share/agent-harness/coordinator-instance (chezmoi renders it per profile: personal
 # ~/git/coordinator, work the work coordinator's checkout), else ~/git/coordinator. On the work profile line 2 is the work coordinator's state dir; it is used
 # only when COORDINATOR_STATE_DIR is unset and that dir holds pane-bin/ledger, so the ledger read is the work instance's, never the personal default.

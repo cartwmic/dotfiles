@@ -83,6 +83,7 @@ python3 scripts/ci-par.py \
   tests/pr-body-check \
   tests/pr-open \
   tests/pr-redact \
+  tests/public-text-check \
   tests/issue-open \
   tests/intent-review-check \
   tests/review-intent \

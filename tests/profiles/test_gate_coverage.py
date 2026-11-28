@@ -106,7 +106,7 @@ class TableTest(unittest.TestCase):
                         self.assertIn(path, self.managed[profile], "%s: %s is not managed on %s" % (gate, path, profile))
 
     def test_every_work_gate_wrapper_that_personal_has_is_on_work(self):
-        wrappers = {".local/bin/pr-body-check", ".local/bin/pr-record", ".local/bin/pr-open", ".local/bin/pr-redact", ".local/bin/intent-review-check",
+        wrappers = {".local/bin/pr-body-check", ".local/bin/pr-record", ".local/bin/pr-open", ".local/bin/pr-redact", ".local/bin/public-text-check", ".local/bin/intent-review-check",
                     ".local/bin/ci-main-status", ".local/bin/agent-traces", ".local/bin/issue-open", ".local/bin/claims"}
         self.assertEqual(wrappers - self.managed[WORK], set())
         self.assertEqual(wrappers - self.managed[PERSONAL], set())
@@ -198,6 +198,10 @@ class WrapperTest(Base):
         status = self.bin / "ci-main-status"
         status.write_text('#!/bin/sh\necho "$@" >> "%s"\n' % self.threads_log)
         status.chmod(status.stat().st_mode | stat.S_IXUSR)
+        # the merge form of pr-body-check also runs public-text-check on the PR first; a stub that passes keeps these tests about the checkout and state dir
+        public = self.bin / "public-text-check"
+        public.write_text("#!/bin/sh\nexit 0\n")
+        public.chmod(public.stat().st_mode | stat.S_IXUSR)
 
     def install(self, data, repo, state=None, with_instance_file=True):
         """A home for `data`'s profile: the instance file chezmoi renders, a fake checkout with the three scripts, and optionally the state dir's pane-bin/ledger."""
