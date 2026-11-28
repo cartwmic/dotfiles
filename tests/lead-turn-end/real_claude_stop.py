@@ -14,6 +14,8 @@ dot_claude/modify_settings.json.tmpl is installed in the scratch config, plus th
   no-seat+agent the same, and its turn starts a native Agent helper                                                 -> 0 records
   builder       COORDINATOR_SEAT=builder (the seat file's own value)                                                -> 0 records
   coordinator   COORDINATOR_SEAT=coordinator (the coordinator instance)                                             -> 0 records
+  lead+claude-p / default+claude-p  a lead whose turn runs `claude -p` in its shell (hill-climb's judge): the nested run's own Stop adds -> no record (the lead's own end still counts)
+Each session is started the way T3 starts one, as a streaming SDK child (`--input-format stream-json`, the prompt on stdin, no -p); the hook tells it from a one-shot `claude -p` by that command line.
 
 Needs chezmoi, jq, node, python3 and claude on PATH, a coordinator checkout (COORDINATOR_REPO, default ~/git/coordinator) and a model login in ~/.claude/settings.json.
 """
@@ -97,32 +99,45 @@ def main():
         ledger = sqlite3.connect(state / "ledger.sqlite")
         ledger.execute("CREATE TABLE workstreams (name TEXT, conversation TEXT)")
 
-        def session(seat, extra_args, lead_workstream=False, helper=False):
+        def session(seat, extra_args, lead_workstream=False, helper=False, nested=False):
             thread = str(uuid.uuid4())
             if lead_workstream:
                 ledger.execute("INSERT INTO workstreams VALUES (?, ?)", ("scratch lead", "t3:" + thread))
             ledger.commit()
-            prompt = ("Use the Agent tool once with subagent_type general-purpose and the prompt 'Reply with the word ok', then reply with the single word ok." if helper
-                      else "Reply with the single word ok.")
+            if nested:
+                prompt = "Use the Bash tool once to run exactly this command: claude -p 'Reply with the single word PASS' --tools Read --no-session-persistence --model %s   Then reply with the single word ok." % MODEL
+            elif helper:
+                prompt = "Use the Agent tool once with subagent_type general-purpose and the prompt 'Reply with the word ok', then reply with the single word ok."
+            else:
+                prompt = "Reply with the single word ok."
             env = {"PATH": os.environ["PATH"], "HOME": str(home), "CLAUDE_CONFIG_DIR": str(config), "T3CODE_THREAD_ID": thread, "T3CODE_CLI_PATH": str(t3)}
             if seat:
                 env["COORDINATOR_SEAT"] = seat
-            done = subprocess.run(["claude", "-p", prompt, "--model", MODEL, *(["--allowedTools", "Agent"] if helper else []), *extra_args], env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=300)
-            if done.returncode != 0 or "ok" not in done.stdout.lower():
-                die("claude did not complete a turn (exit %s): %s" % (done.returncode, (done.stdout + done.stderr).strip()[:300]))
-            fired = [json.loads(line.split(" ", 1)[1]) for line in (stops.read_text().splitlines() if stops.exists() else []) if line.startswith(thread + " ")]
-            return records(thread), fired
+            # T3 starts its sessions as a streaming SDK child: `claude --input-format stream-json --output-format stream-json`, the turn's prompt on stdin, no -p.
+            message = json.dumps({"type": "user", "message": {"role": "user", "content": prompt}})
+            allowed = ["--allowedTools", "Bash" if nested else "Agent"] if nested or helper else []
+            done = subprocess.run(["claude", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--model", MODEL, *allowed, *extra_args],
+                                  env=env, input=message + "\n", capture_output=True, text=True, timeout=300)
+            results = [e for e in (json.loads(line) for line in done.stdout.splitlines() if line.startswith("{")) if e.get("type") == "result"]
+            if done.returncode != 0 or not results or results[-1].get("is_error") or "ok" not in str(results[-1].get("result")).lower():
+                die("claude did not complete a turn (exit %s): %s" % (done.returncode, (done.stdout[-300:] + done.stderr).strip()[:400]))
+            own = results[-1]["session_id"]
+            stops_all = [json.loads(line.split(" ", 1)[1]) for line in (stops.read_text().splitlines() if stops.exists() else []) if line.startswith(thread + " ")]
+            return records(thread), [f for f in stops_all if f["session_id"] == own], [f for f in stops_all if f["session_id"] != own]
 
         failed = False
         scenarios = (("default", None, [], dict(lead_workstream=True), 1), ("default+agent", None, [], dict(lead_workstream=True, helper=True), 1),
                      ("seat-lead", "lead", ["--settings", str(seat_lead)], {}, 1), ("no-seat", None, [], {}, 0), ("no-seat+agent", None, [], dict(helper=True), 0),
-                     ("builder", "builder", [], {}, 0), ("coordinator", "coordinator", [], {}, 0))
+                     ("builder", "builder", [], {}, 0), ("coordinator", "coordinator", [], {}, 0),
+                     ("lead+claude-p", "lead", ["--settings", str(seat_lead)], dict(nested=True), 1), ("default+claude-p", None, [], dict(lead_workstream=True, nested=True), 1))
         for name, seat, args, options, want in scenarios:
-            got, fired = session(seat, args, **options)
+            got, fired, nested_stops = session(seat, args, **options)
             # A helper (the Agent tool's subagent) fires no Stop of its own: every Stop belongs to the session. Its completion can wake the session for a second turn, which is a second end and a second record.
+            # A `claude -p` the session starts from its shell is another session (its own session id) that inherits the thread id and seat: it fires a Stop too, and it adds no record.
             ok = all("agent_id" not in f for f in fired) and all(r["facts"]["lead"] is True for r in got) and len(got) == (len(fired) if want else 0) and len(fired) >= 1
+            ok = ok and (len(nested_stops) >= 1 if options.get("nested") else not nested_stops)
             failed |= not ok
-            print("%-14s stops=%d records=%d expected=%s lead=%s %s" % (name, len(fired), len(got), "one per stop" if want else "none", [r["facts"]["lead"] for r in got], "ok" if ok else "MISMATCH"))
+            print("%-17s stops=%d nested-stops=%d records=%d expected=%s lead=%s %s" % (name, len(fired), len(nested_stops), len(got), "one per stop" if want else "none", [r["facts"]["lead"] for r in got], "ok" if ok else "MISMATCH"))
         return 1 if failed else 0
     finally:
         shutil.rmtree(home, ignore_errors=True)

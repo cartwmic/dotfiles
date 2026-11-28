@@ -41,7 +41,8 @@
 # Lead turn-end Stop hook (both desktop profiles): one Stop group running hooks/lead_turn_end.py, which asks `coordinator t3 turn-end` when a lead thread ends a turn. It is
 # registered here, in the user-level settings every T3 provider instance reads, and not in a seat file: the default `claudeAgent` instance has no seat file, so a lead thread
 # there (the sweep lead) never ran it. Seat files carry no copy, so a thread on seat-lead gets it once. The script skips the seats that must not be asked (builder, planner,
-# reviewer, scout, computer, coordinator, homelab-chat: its COORDINATOR_SEAT) and a session with no T3CODE_THREAD_ID. The checkout and state directory are this profile's own
+# reviewer, scout, computer, coordinator, homelab-chat: its COORDINATOR_SEAT), a session with no T3CODE_THREAD_ID, a session with no seat that the ledger does not name a lead workstream's
+# thread (one the owner opens), and a one-shot `claude -p` a lead's shell started (it inherits the lead's seat and thread). See the script's docstring. The checkout and state directory are this profile's own
 # coordinator, the places the Pi extension uses. agentHost.removeCoordinatorHook removes the group, as it removes the coordinator hook. It fails open: a missing script or python3 allows the stop.
 # Pattern-kill guard (both desktop profiles): a PreToolUse hook on Bash and Monitor (both run shell commands) that refuses pkill and killall, so an agent's pattern kill
 # cannot hit another agent's jobs (the script is dot_local/share/agent-harness/hooks/refuse_pattern_kill.py, agent-harness README,

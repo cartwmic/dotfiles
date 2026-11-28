@@ -130,7 +130,7 @@ class RenderTest(unittest.TestCase):
         command = group_commands(self.apply(script, {}))[0]
         home = self.root / "home"
         env = {k: v for k, v in os.environ.items() if k not in ("T3CODE_THREAD_ID", "COORDINATOR_STATE_DIR", "COORDINATOR_SEAT")}
-        env.update({"HOME": str(home), "T3CODE_THREAD_ID": "thread:lead"})
+        env.update({"HOME": str(home), "T3CODE_THREAD_ID": "thread:lead", "LEAD_TURN_END_PS": "/nonexistent/ps"})
         run = lambda: subprocess.run(["sh", "-c", command.replace(str(self.root), str(home))], input="{}", capture_output=True, text=True, env=env, timeout=60)
         home.mkdir()
         self.assertEqual(run().returncode, 0)                                      # script not installed: allowed
@@ -157,10 +157,19 @@ class SeatGuardTest(unittest.TestCase):
         self.state = root / "state"
         self.state.mkdir()
         self.record = root / "record"
+        self.ps = root / "ps"
+        self.chain([])
+
+    def chain(self, lines):
+        """A stub `ps -o ppid=,args= -p PID` that answers the n-th call with the n-th line of `lines` ("PPID args", walking up from the hook's parent); a call past the end fails like a missing process."""
+        (self.ps.parent / "ps-lines").write_text("\n".join(lines) + ("\n" if lines else ""))
+        self.ps.write_text('#!/bin/sh\nd=$(dirname "$0")\nn=$(cat "$d/ps-n" 2>/dev/null || echo 0)\nn=$((n+1))\necho $n > "$d/ps-n"\nline=$(sed -n "${n}p" "$d/ps-lines")\n[ -n "$line" ] || exit 1\necho "$line"\n')
+        self.ps.chmod(0o755)
+        (self.ps.parent / "ps-n").unlink(missing_ok=True)
 
     def run_hook(self, seat, repo=None):
         env = {k: v for k, v in os.environ.items() if k not in ("T3CODE_THREAD_ID", "COORDINATOR_STATE_DIR", "COORDINATOR_SEAT")}
-        env.update({"T3CODE_THREAD_ID": "thread:x", "STUB_RECORD": str(self.record), "RUN_AND_WAKE_STATE": str(Path(self.tmp.name) / "rw"), "KGATE_STATE": str(Path(self.tmp.name) / "kg")})
+        env.update({"T3CODE_THREAD_ID": "thread:x", "LEAD_TURN_END_PS": str(self.ps), "STUB_RECORD": str(self.record), "RUN_AND_WAKE_STATE": str(Path(self.tmp.name) / "rw"), "KGATE_STATE": str(Path(self.tmp.name) / "kg")})
         if seat is not None:
             env["COORDINATOR_SEAT"] = seat
         return subprocess.run([sys.executable, str(HOOK), "--repo", str(repo or self.repo), "--state", str(self.state)], input="{}", capture_output=True, text=True, env=env, timeout=60)
@@ -215,6 +224,33 @@ class SeatGuardTest(unittest.TestCase):
         (self.state / "ledger.sqlite").unlink()
         self.assertEqual(self.run_hook(None).returncode, 0)                      # no ledger file at all
         self.assertEqual(len(self.calls()), 2)
+
+
+    def test_a_one_shot_claude_p_started_from_a_shell_is_skipped(self):
+        self.ledger(["t3:thread:x"])   # the lead's own thread: the nested run carries its id and passes the ledger check
+        T3 = "/home/agent/.local/bin/claude --output-format stream-json --verbose --input-format stream-json --model m --resume=abc"
+        nested = "/home/agent/.local/bin/claude -p --tools Read --model claude-haiku-5-5"
+        for name, seat, lines, skipped in (
+                ("claude -p", "lead", ["10 " + nested], True),
+                ("claude -p under sh", None, ["10 sh -c hook", "11 " + nested], True),
+                ("claude --print", "lead", ["10 claude --print --model m"], True),
+                ("T3's streaming claude", "lead", ["10 " + T3], False),
+                ("streaming claude with -p", "lead", ["10 claude -p --input-format=stream-json --output-format stream-json"], False),
+                ("T3's claude under sh", None, ["10 sh -c hook", "11 " + T3], False),
+                ("no claude in the chain", "lead", ["10 sh", "11 zsh", "1 init"], False),
+                ("ps cannot read it", "lead", [], False)):
+            with self.subTest(name):
+                self.chain(lines)
+                self.record.unlink(missing_ok=True)
+                shutil.rmtree(self.state / "t3-hook", ignore_errors=True)
+                done = self.run_hook(seat, repo=self.state / "no-such-checkout")   # a call would fail and leave a line in the adapter log
+                self.assertEqual(done.returncode, 0)
+                self.assertEqual((self.state / "t3-hook/turn-end-adapter.jsonl").exists(), not skipped)
+
+    def test_the_nearest_claude_decides_not_one_further_up(self):
+        self.chain(["10 sh", "11 claude --input-format stream-json", "12 sh", "13 claude -p"])    # T3's session, started under some other claude's shell
+        self.assertEqual(self.run_hook("lead", repo=self.state / "no-such-checkout").returncode, 0)
+        self.assertTrue((self.state / "t3-hook/turn-end-adapter.jsonl").exists())
 
 
 if __name__ == "__main__":

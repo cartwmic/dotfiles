@@ -10,6 +10,9 @@ Where it runs: the user-level settings.json (dot_claude/modify_settings.json.tmp
 Whether a thread is a lead is the coordinator's answer (`coordinator t3 turn-end` reads T3's parent field), but T3 calls every top-level thread a lead, Michael's own sessions included. So this script skips, before any call is made:
 - COORDINATOR_SEAT builder, planner, reviewer, scout, computer (worker seats), coordinator (the coordinator instance has no lead check), homelab-chat (its settings deny the ledger and state-note calls the refusal asks for);
 - a session with no seat that is not a lead workstream's thread: it has no COORDINATOR_SEAT=lead and the ledger (<state>/ledger.sqlite, table `workstreams`) has no workstream whose `conversation` is `t3:<thread>`. That is a session Michael opens himself.
+- a one-shot `claude -p` that a lead's shell started (hill-climb's judge, a ticket lookup). It inherits the lead's COORDINATOR_SEAT and T3CODE_THREAD_ID and loads this same Stop group, but it is not the lead's session: its end is not the lead's turn end. T3 starts its own Claude sessions as a streaming SDK child
+  (`claude --input-format stream-json ...`, no `-p`; its parent is the T3 server). The hook finds the claude process it runs under (the nearest claude ancestor, read with `ps`) and skips when that process was started with `-p`/`--print` and without `--input-format`. Env cannot tell the two apart (a nested run inherits every variable
+  T3 sets), so the command line of the session's own claude process is the signal. A claude process that cannot be found or read counts as the T3 session: the thread is asked.
 A skipped session exits 0 and writes nothing. COORDINATOR_SEAT=lead always goes to the coordinator. A no-seat session goes there when the ledger names it a lead workstream's thread, and also when the ledger cannot be read (missing file, no table, locked): an unreadable
 ledger never hides a lead. Claude Code's own helpers (the Agent tool's subagents) do not fire the Stop hook; their end is a SubagentStop, which nothing here registers.
 
@@ -19,7 +22,7 @@ nothing is written (this is not a lead session, or it is not set up). Once a thr
 checkout or state directory, a command that fails, times out or is missing, output it cannot read) writes one JSON line to <state>/t3-hook/turn-end-adapter.jsonl, as does an end
 the coordinator would have refused after a refusal already went out. Each line has `ts`, `adapter`, `thread`, `outcome` ("allowed"), `cause` ("check-failed" or "after-refusal"),
 `reason` and `duration_ms`. A refusal is never issued on a stop that follows one (`stop_hook_active`), whatever the coordinator answers.
-Test hooks: LEAD_TURN_END_NODE names the node binary; LEAD_TURN_END_TIMEOUT is the command's time limit in seconds (default 30).
+Test hooks: LEAD_TURN_END_NODE names the node binary; LEAD_TURN_END_PS names the ps binary (a missing one means the claude process cannot be read, so the thread is asked); LEAD_TURN_END_TIMEOUT is the command's time limit in seconds (default 30).
 """
 import json
 import os
@@ -49,6 +52,35 @@ def is_lead_workstream(state, thread):
             db.close()
     except sqlite3.Error:
         return None
+
+
+def claude_command(env):
+    """The argument list of the claude process this hook runs under (the nearest ancestor whose program is `claude`), or None when there is none or it cannot be read."""
+    ps = env.get("LEAD_TURN_END_PS") or "ps"
+    pid = os.getppid()
+    for _ in range(8):
+        try:
+            done = subprocess.run([ps, "-o", "ppid=,args=", "-p", str(pid)], capture_output=True, text=True, timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        fields = done.stdout.strip().split(None, 1)
+        if done.returncode != 0 or len(fields) < 2 or not fields[0].isdigit():
+            return None
+        words = fields[1].split()
+        if words and os.path.basename(words[0]) == "claude":
+            return words[1:]
+        pid = int(fields[0])
+        if pid <= 1:
+            return None
+    return None
+
+
+def started_by_a_shell(env):
+    """True when this session is a one-shot `claude -p` (not T3's streaming SDK child): its claude process has -p or --print and no --input-format."""
+    words = claude_command(env)
+    if words is None:
+        return False
+    return any(w in ("-p", "--print") for w in words) and not any(w == "--input-format" or w.startswith("--input-format=") for w in words)
 
 
 def option(argv, name):
@@ -126,6 +158,8 @@ def refusal(argv, hook_input, env):
         return None
     repo, state = option(argv, "--repo"), env.get("COORDINATOR_STATE_DIR") or option(argv, "--state")
     if not thread or not repo or not state:
+        return None
+    if started_by_a_shell(env):
         return None
     if env.get("COORDINATOR_SEAT") != "lead" and is_lead_workstream(state, thread) is False:
         return None

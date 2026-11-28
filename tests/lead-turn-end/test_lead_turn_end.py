@@ -56,7 +56,7 @@ class HookTest(unittest.TestCase):
 
     def run_hook(self, hook_input="{}", thread="thread:lead", extra=None, repo=None, state=None):
         env = {k: v for k, v in os.environ.items() if k not in ("T3CODE_THREAD_ID", "COORDINATOR_STATE_DIR", "COORDINATOR_SEAT")}
-        env.update({"STUB_RECORD": str(self.record), "RUN_AND_WAKE_STATE": str(Path(self.tmp.name) / "rw"), "KGATE_STATE": str(Path(self.tmp.name) / "kg"), **(extra or {})})
+        env.update({"LEAD_TURN_END_PS": "/nonexistent/ps", "STUB_RECORD": str(self.record), "RUN_AND_WAKE_STATE": str(Path(self.tmp.name) / "rw"), "KGATE_STATE": str(Path(self.tmp.name) / "kg"), **(extra or {})})
         if thread:
             env["T3CODE_THREAD_ID"] = thread
         return subprocess.run([sys.executable, str(self.hooks / "lead_turn_end.py"), "--repo", str(repo or self.repo), "--state", str(state or self.state)],
