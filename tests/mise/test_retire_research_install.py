@@ -3,6 +3,7 @@
 The real script runs in a scratch HOME with a fake mise data directory (no mise, no network). Each case builds the directory
 tree mise leaves behind: versions, the version links that mise adds, the download cache and the shim.
 """
+import json
 import os
 import subprocess
 import tempfile
@@ -116,6 +117,43 @@ class RetireResearchTest(unittest.TestCase):
         self.assertEqual(run(self.home, XDG_DATA_HOME=str(xdg)).returncode, 0)
         self.assertFalse((xdg / "mise" / "installs" / "research").exists())
         self.assertTrue((self.data / "installs" / "research" / "0.71.2").is_dir())
+
+    def test_a_dangling_shim_alone_is_still_removed(self):
+        build(self.data)
+        (self.data / "shims" / "research").symlink_to("/nonexistent/mise")
+        r = run(self.home)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(os.path.lexists(self.data / "shims" / "research"))
+        self.kept_tools_intact()
+
+    def test_a_link_at_the_install_path_is_removed_without_touching_its_target(self):
+        build(self.data)
+        outside = self.home / "outside"
+        (outside / "0.71.2").mkdir(parents=True)
+        (self.data / "installs" / "research").symlink_to(outside)
+        r = run(self.home)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(os.path.lexists(self.data / "installs" / "research"))
+        self.assertTrue((outside / "0.71.2").is_dir())
+        self.assertNotIn("versions:", r.stdout)
+
+    def records(self):
+        log = self.home / ".local/state/agent-harness/retire-research-mise-install.jsonl"
+        return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+
+    def test_a_removal_leaves_one_json_record_and_a_quiet_run_leaves_none(self):
+        build(self.data)
+        run(self.home)
+        self.assertEqual(self.records(), [])
+        research = self.data / "installs" / "research"
+        for version in ("0.70.2", "0.71.2"):
+            (research / version).mkdir(parents=True)
+        run(self.home)
+        (record,) = self.records()
+        self.assertEqual((record["event"], record["versions"], record["data_dir"]), ("research-install-removed", "0.70.2 0.71.2", str(self.data)))
+        self.assertRegex(record["ts"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        run(self.home)
+        self.assertEqual(len(self.records()), 1)
 
 
 if __name__ == "__main__":
