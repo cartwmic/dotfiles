@@ -165,7 +165,8 @@ class BumpTests(Fixture):
             (self.bin / gate).write_text(FAKE_GATE)
             (self.bin / gate).chmod(0o755)
         for name in ("dotfiles-apply", "dotfiles-update"):  # the real commands: the bump tools apply through them
-            (self.bin / name).symlink_to(ROOT / "dot_local/bin" / ("executable_" + name))
+            (self.bin / name).write_text('#!/bin/sh\nexec python3 "%s" "$@"\n' % (ROOT / "dot_local/bin" / ("executable_" + name)))  # git keeps dotfiles-update at mode 644: run it by its interpreter
+            (self.bin / name).chmod(0o755)
         (self.bin / "pr-record").write_text(FAKE_PR_RECORD)
         (self.bin / "pr-record").chmod(0o755)
         self.refuse = ""  # the name of a gate the next run should refuse

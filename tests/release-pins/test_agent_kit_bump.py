@@ -170,7 +170,8 @@ class AgentKitBumpTests(unittest.TestCase):
             (self.bin / name).write_text(text, encoding="utf-8")
             (self.bin / name).chmod(0o755)
         for name in ("dotfiles-apply", "dotfiles-update"):  # the real commands: the bump tools apply through them
-            (self.bin / name).symlink_to(ROOT / "dot_local/bin" / ("executable_" + name))
+            (self.bin / name).write_text('#!/bin/sh\nexec python3 "%s" "$@"\n' % (ROOT / "dot_local/bin" / ("executable_" + name)))  # git keeps dotfiles-update at mode 644: run it by its interpreter
+            (self.bin / name).chmod(0o755)
         self.home = self.dir / "home"
         self.origin = self.dir / "origin.git"
         self.checkout = self.dir / "checkout"

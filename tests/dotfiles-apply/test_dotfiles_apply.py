@@ -63,7 +63,7 @@ class DotfilesApply(unittest.TestCase):
         self.state = self.home / ".local/state/dotfiles-apply"
         self.install("ci-main-status", GATE)
         self.install("chezmoi", CHEZMOI_SHIM)
-        (self.bin / "dotfiles-update").symlink_to(UPDATE)
+        self.install("dotfiles-update", '#!/bin/sh\nexec python3 "%s" "$@"\n' % UPDATE)  # git keeps dotfiles-update at mode 644: run it by its interpreter
         subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(self.bare)], check=True)
         subprocess.run(["git", "clone", "-q", str(self.bare), str(self.author)], check=True, capture_output=True)
         self.write("dot_a", "one\n")
