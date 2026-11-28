@@ -1537,12 +1537,35 @@ class ContainsGreen(Fixture):
                      ("--contains", self.c1, "dotfiles"), ("--merge-gate", "dotfiles", "--contains", self.c1),
                      ("--tip", "--all", "--contains", self.c1), ("--tip", "dotfiles", "loop-engine", "--contains", self.c1),
                      ("--tip", "nonesuch", "--contains", self.c1), ("--tip", "coordinator", "--contains", self.c1),
-                     ("--tip", "dotfiles", "--pr", "5", "--contains", self.c1)):
+                     ("--tip", "dotfiles", "--pr", "5", "--contains", self.c1), ("--tip", "dotfiles", "--contains", self.c1, "--owner-approved", "5"),
+                     ("--tip", "dotfiles", "--contains", self.c1, "--owner-approved"), ("--tip", "dotfiles", f"--contains={self.c1}"),
+                     ("--threads", "dotfiles", "5", "--contains", self.c1), ("--tip", "dotfiles", "--contains", self.c1, "--contains", self.c2),
+                     ("--tip", "--tip", "dotfiles", "--contains", self.c1)):
             with self.subTest(args=args):
                 rc, out, err = self.streams(*args)
                 self.assertEqual(rc, 2, out + err)
                 self.assertIn("usage: ci-main-status --tip REPO --contains SHA", err)
         self.assertFalse(self.log.exists(), "a wrong call makes no gh call")
+
+    def test_a_refused_call_leaves_one_log_line_and_an_owner_ask_leaves_its_refusal(self):
+        self.env["OWNER_APPROVED_LOG"] = str(Path(self.env["CI_MAIN_STATUS_HIDDEN_LOG"]).with_name("owner.jsonl"))
+        self.assertEqual(self.streams("--tip", "dotfiles", "--contains", "xyz")[0], 2)
+        self.assertEqual(self.streams("--tip", "dotfiles", "--contains", self.c1, "--owner-approved", "ask-17")[0], 2)
+        rows = [json.loads(l) for l in Path(self.env["CI_MAIN_STATUS_HIDDEN_LOG"]).read_text().splitlines()]
+        self.assertEqual([(r["action"], r["verdict"], r["exit"], r["reads"]) for r in rows], [("contains", "USAGE", 2, 0)] * 2)
+        asked = [json.loads(l) for l in Path(self.env["OWNER_APPROVED_LOG"]).read_text().splitlines()]
+        self.assertEqual([(a["ask"], a["outcome"]) for a in asked], [("ask-17", "refused")])
+        self.assertFalse(self.log.exists(), "a wrong call makes no gh call")
+
+    def test_a_rate_limit_on_the_compare_call_is_exit_1_even_when_a_sha_holds_404(self):
+        self.dotfiles_runs([run(1, self.c3, "success")])
+        self.fail_path = {"/compare/": "HTTP 403: API rate limit exceeded"}
+        for sha in (self.c1, "abc404d"):
+            with self.subTest(sha=sha):
+                rc, out, _ = self.ask(sha)
+                self.assertEqual(rc, 1, out)
+                self.assertIn("rate limit", out)
+                self.assertNotIn("is not a commit", out)
 
     def test_a_sha_that_is_no_commit_of_the_repo_is_exit_2(self):
         self.dotfiles_runs([run(1, self.c3, "success")])
