@@ -153,8 +153,11 @@ GH_FAKE = textwrap.dedent('''\
             if notes is None:
                 fail("HTTP 404: no annotations fixture for " + path)
             print(json.dumps(notes))
-        elif path == "repos/" + repo:
-            print(json.dumps({"default_branch": "main"}))
+        elif path == "repos/" + repo:   # the repo's settings: squash_merge_commit_message is what each repo had before the change; fixture["squash"][repo] None leaves the field out, "fail:MSG" fails
+            squash = (fixture.get("squash") or {}).get(repo, "PR_BODY" if repo.endswith("/storycraft") else "COMMIT_MESSAGES")
+            if squash and squash.startswith("fail:"):
+                fail(squash[5:])
+            print(json.dumps({"default_branch": "main", **({"squash_merge_commit_message": squash} if squash else {})}))
         elif "/pulls/" in path:
             n = path.split("/pulls/")[1].split("?")[0].split("/")[0]
             pull = fixture.get("prs", {}).get(n)
@@ -309,7 +312,7 @@ class Fixture(unittest.TestCase):
              "fail_once": getattr(self, "fail_once", []), "compare_cap": getattr(self, "compare_cap", 10000),
              "compare_drop": getattr(self, "compare_drop", []), "listing_drop": getattr(self, "listing_drop", []),
              "fail_path": getattr(self, "fail_path", {}), "reply": getattr(self, "reply", {}),
-             "issues": getattr(self, "issues", {})}))
+             "issues": getattr(self, "issues", {}), "squash": getattr(self, "squash", {})}))
 
     def dotfiles_runs(self, runs):
         self.runs = {"cartwmic/dotfiles|ci.yml": runs}
@@ -1284,6 +1287,38 @@ class RedMainFix(Fixture):
         self.assertEqual(rc, 1, out)
         self.assertIn(f"put `Handles: {self.c3}` in the PR description (storycraft squashes from the PR body)", err)
 
+    SQUASH_CASES = [   # (repo, workflow, live setting, where the PR carries the line, exit, text that must show, squash_source in the log)
+        ("agent-kit", "unit.yml", "PR_BODY", "body", 0, "", "PR_BODY"),
+        ("agent-kit", "unit.yml", "PR_BODY", "commit", 1, "put `Handles: {sha}` in the PR description", "PR_BODY"),
+        ("agent-kit", "unit.yml", "COMMIT_MESSAGES", "commit", 0, "", "COMMIT_MESSAGES"),
+        ("agent-kit", "unit.yml", "COMMIT_MESSAGES", "body", 1, "put `Handles: {sha}` in the fix's commit message", "COMMIT_MESSAGES"),
+        ("agent-kit", "unit.yml", "BLANK", "commit", 1, "squashes with a blank message (BLANK)", "BLANK"),
+        ("agent-kit", "unit.yml", None, "commit", 0, "could not read cartwmic/agent-kit's squash_merge_commit_message", "fixed:the commit messages"),
+        ("loop-engine", "ci.yml", None, "body", 0, "using the row's fixed value, the PR body", "fixed:the PR body"),
+        ("loop-engine", "ci.yml", "fail:HTTP 403: forbidden", "commit", 1, "put `Handles: {sha}` in the PR description", "fixed:the PR body"),
+    ]
+
+    def test_the_line_counts_where_the_live_squash_setting_says_and_the_log_names_the_source(self):
+        for repo, workflow, setting, carried, want_rc, text, source in self.SQUASH_CASES:
+            with self.subTest(repo=repo, setting=setting, carried=carried):
+                self.WF = f"cartwmic/{repo}|{workflow}"
+                self.squash = {f"cartwmic/{repo}": setting}
+                self.world(self.dispatch(4))
+                self.prs["7"].update(names(self.c3, in_body=carried == "body"))
+                rc, out, err = self.gate("--pr", "7", repo=repo)
+                self.assertEqual(rc, want_rc, out + err)
+                self.assertIn(text.format(sha=self.c3), out + err)
+                last = json.loads(Path(self.env["CI_MAIN_STATUS_HIDDEN_LOG"]).read_text().splitlines()[-1])
+                self.assertEqual(last["squash_source"], source)
+                Path(self.env["CI_MAIN_STATUS_HIDDEN_LOG"]).unlink()
+
+    def test_a_green_main_still_reads_the_setting_and_logs_it(self):
+        self.runs = {"cartwmic/loop-engine|ci.yml": [run(1, self.c3, "success")]}
+        self.squash = {"cartwmic/loop-engine": "PR_BODY"}
+        rc, out = self.status("--merge-gate", "loop-engine")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(json.loads(Path(self.env["CI_MAIN_STATUS_HIDDEN_LOG"]).read_text().splitlines()[-1])["squash_source"], "PR_BODY")
+
     def test_the_log_line_for_a_pass_on_a_red_main_names_the_rule(self):
         self.flaky_red_with_unrelated_pr()
         log = Path(self.env["CI_MAIN_STATUS_HIDDEN_LOG"])
@@ -1664,8 +1699,56 @@ class PinLagLine(Fixture):
             with self.subTest(args=args):
                 rc, out = self.status(*args)
                 self.assertEqual(self.lines(out), [], out)
-        self.assertNotIn("issue list", self.log.read_text())
+        self.assertNotIn("--label pin-lag", self.log.read_text())
         self.assertEqual(len(self.lines(self.status("--all", "--merge-gate")[1])), 1)
+
+
+def settings_issue(title, ago=datetime.timedelta(hours=2, seconds=30)):
+    made = datetime.datetime.now(datetime.timezone.utc) - ago
+    return {"title": title, "createdAt": made.strftime("%Y-%m-%dT%H:%M:%SZ"), "url": "https://github.com/cartwmic/dotfiles/issues/1050"}
+
+
+class RepoSettingsLine(Fixture):
+    """--merge-gate REPO prints one `repo-settings:` warning while an open repo-settings issue of dotfiles names the repo, and never changes the exit code."""
+    LABEL_READ = "--label repo-settings"
+    DIFFERS = "Repo settings: cartwmic/loop-engine differs (3)"
+    UNREAD = "Repo settings: cartwmic/loop-engine could not be read at the last pin bump"
+
+    def lines(self, out):
+        return [line for line in out.splitlines() if line.startswith("repo-settings:")]
+
+    def gate(self, issues, repo="loop-engine"):
+        self.runs = {f"cartwmic/{repo}|ci.yml": [run(1, self.c3, "success")]}
+        self.reply = {self.LABEL_READ: json.dumps(issues)}
+        return self.status("--merge-gate", repo)
+
+    def test_an_open_issue_for_the_repo_prints_one_line_and_the_exit_stays_0(self):
+        other = settings_issue("Repo settings: cartwmic/agent-kit differs (1)")
+        for title, tail in ((self.DIFFERS, "differs (3)"), (self.UNREAD, "could not be read at the last pin bump")):
+            with self.subTest(title=title):
+                rc, out = self.gate([other, settings_issue(title)])
+                self.assertEqual(rc, 0, out)
+                self.assertEqual(self.lines(out), [f"repo-settings: cartwmic/loop-engine {tail}, open 2h 0m (https://github.com/cartwmic/dotfiles/issues/1050)"])
+                self.assertIn("GREEN", out)
+                last = json.loads(Path(self.env["CI_MAIN_STATUS_HIDDEN_LOG"]).read_text().splitlines()[-1])
+                self.assertEqual((last["repo_settings"], last["repo_settings_error"]), (self.lines(out)[0], None))
+
+    def test_no_issue_for_the_repo_prints_no_line_and_a_red_main_still_refuses(self):
+        rc, out = self.gate([settings_issue("Repo settings: cartwmic/agent-kit differs (1)")])
+        self.assertEqual((rc, self.lines(out)), (0, []))
+        self.runs = {"cartwmic/loop-engine|ci.yml": [run(2, self.c3, "failure", age=5), run(1, self.c2, "success", age=1)]}
+        self.reply = {self.LABEL_READ: json.dumps([settings_issue(self.DIFFERS)])}
+        rc, out = self.status("--merge-gate", "loop-engine")
+        self.assertEqual((rc, len(self.lines(out))), (1, 1), out)
+
+    def test_an_unreadable_issue_list_prints_no_line_and_changes_no_exit_code(self):
+        self.runs = {"cartwmic/loop-engine|ci.yml": [run(1, self.c3, "success")]}
+        self.fail_path = {self.LABEL_READ: "HTTP 403: API rate limit exceeded"}
+        rc, out = self.status("--merge-gate", "loop-engine")
+        self.assertEqual((rc, self.lines(out)), (0, []), out)
+        last = json.loads(Path(self.env["CI_MAIN_STATUS_HIDDEN_LOG"]).read_text().splitlines()[-1])
+        self.assertIsNone(last["repo_settings"])
+        self.assertTrue(last["repo_settings_error"])
 
 
 class PinFixCopiesMatchTheirSources(unittest.TestCase):

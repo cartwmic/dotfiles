@@ -125,6 +125,19 @@ class HiddenRed(base.Fixture):
                 self.assertIn(f"Handles: {self.c2}", out)
                 self.assertIn("  dotfiles: GREEN", out)   # the line that would have come first follows, indented
 
+    def test_the_red_block_names_the_place_the_live_squash_setting_says_even_on_a_plain_call(self):
+        self.red_below_green()
+        for setting, shown, hidden in (("PR_BODY", "put this line in the PR description (dotfiles squashes from the PR body)", "the fix's commit message"),
+                                       ("COMMIT_MESSAGES", "put this line in the fix's commit message", "PR description"),
+                                       ("BLANK", "no `Handles:` line can clear it", "put this line in")):
+            with self.subTest(setting=setting):
+                self.squash = {"cartwmic/dotfiles": setting}
+                rc, out = self.three_ways("dotfiles")
+                self.assertEqual(rc, 1, out)
+                self.assertIn(shown, out)
+                self.assertNotIn(hidden, out)
+                self.assertIn(f"gh run rerun 1 --repo cartwmic/dotfiles", out)
+
     def test_the_red_block_gives_each_red_its_full_sha_a_handles_line_and_a_rerun_command(self):
         first, second = commit(self.src, "first red"), commit(self.src, "second red")
         tip = commit(self.src, "tip")

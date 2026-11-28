@@ -217,9 +217,12 @@ failed in them); the "merge-gate:" line names the run. Where --pr N passes (exit
 (not for one the full-suite rule passed): the dotfiles pin bump scripts (agent_kit_bump.py, loop_engine_bump.py; personal profile only)
 put one "Handles: <sha>" line in the squash body for each, so the bump leaves main readable as green. A refusal exits 1 with the same
 stdout as without --pr (no such line).
-Where the line lands: dotfiles, loop-engine, agent-kit, alert-steward and retro squash-merge with the commit messages
-(squash_merge_commit_message COMMIT_MESSAGES), so the line goes in a commit message of the fix PR; storycraft squashes from the PR body, so
-the line goes in the PR description. A plain merge commit also works: the script reads every commit that reaches main, the branch commits a merge brings in included, so the
+Where the line lands: the gate asks GitHub (one `gh api repos/OWNER/REPO` read a call, kept for the call) for the repo's squash_merge_commit_message.
+PR_BODY: the line goes in the PR description. COMMIT_MESSAGES: in a commit message of the fix PR. BLANK: a squash commit carries neither, so no line
+can reach main; a fix that needs one (every fix by the named-red rule) is refused with that reason, and the gate prints one "squash-source:" line saying so.
+When the setting cannot be read (a token that cannot write contents does not see it, or the call fails) the gate prints one "squash-source:" line saying so and
+uses the fixed value in the repo's row: `squash_body` ("the PR body": storycraft, loop-engine) or, without it, the commit messages. Every call of a repo with a
+"since" logs what it used as "squash_source": PR_BODY, COMMIT_MESSAGES, BLANK or "fixed:<the row's value>". A plain merge commit also works: the script reads every commit that reaches main, the branch commits a merge brings in included, so the
 line in any of them (or in the merge commit's own message) counts. The coordinator's journal path is not part of
 this rule. A merge driver that passes its own --body must carry the line.
 If the fix merged without the line, do not rerun the old run (the old tree still fails): put the line in the squash message of a later small
@@ -228,6 +231,10 @@ pull request, and it clears the red once that merges.
 cartwmic/dotfiles: the release-pins job opens it when a Loop Engine or agent-kit pin lags its latest release and closes it when the pins match (it no longer turns
 main red). The line is a warning: it never changes the exit code, it is also printed when the gate refuses, and a failed read of the issue prints nothing. The call's
 hidden-red log line (below) carries the line as "pin_lag" (null when none) and, when the issue could not be read, the reason as "pin_lag_error".
+--merge-gate REPO also prints one stdout line "repo-settings: <repo> differs (N), open <age> (<issue url>)" or "repo-settings: <repo> could not be read at the last pin bump,
+open <age> (<issue url>)" while an issue labelled repo-settings on cartwmic/dotfiles, titled "Repo settings: <repo> differs (N)" or "Repo settings: <repo> could not be
+read at the last pin bump", is open for the repo (the pin bump opens it when repo-settings-check finds a difference or a value it cannot read). It is a warning like pin-lag:
+it never changes the exit code, and the log line carries it as "repo_settings" and, when the issues could not be read, "repo_settings_error".
 Every call of a repo with a "since" appends one JSON line to ${XDG_STATE_HOME:-~/.local/state}/ci-main-status/hidden-red.jsonl
 (CI_MAIN_STATUS_HIDDEN_LOG overrides it; so do CI_MAIN_STATUS_GITEA_LOG and CI_MAIN_STATUS_THREADS_LOG for theirs; one helper appends
 all three): ts (UTC), duration_ms, repo, action (status, tip, merge-gate, contains), pr, verdict (the first line's word; USAGE for a refused --contains call), exit, hidden (sha, run and
@@ -295,14 +302,14 @@ REPOS = {
     # not held against main. Move it forward to main's tip right before this ships, never back.
     "dotfiles": {"github": "cartwmic/dotfiles", "workflow": "ci.yml", "since": "c666fb34ef3f24c34cb1b6ab7b79334c09df2ef2", "main_queue": True,   # 2026-11-24
                  "handles_labels": ("flaky test", "bug")},
-    "loop-engine": {"github": "cartwmic/loop-engine", "workflow": "ci.yml", "since": "2995bb8e774f0b8d21c9e825e243f755fe3fc2f0"},   # 2026-11-23
+    "loop-engine": {"github": "cartwmic/loop-engine", "workflow": "ci.yml", "since": "2995bb8e774f0b8d21c9e825e243f755fe3fc2f0", "squash_body": "the PR body"},   # 2026-11-23
     "agent-kit": {"github": "cartwmic/agent-kit", "workflow": "unit.yml", "since": "9905bd2a3acefe345b8ec2401713d5b16e43ecf6"},   # 2026-11-24
     "coordinator": {"github": "cartwmic/coordinator", "journal": True},
     "homelab": None,
     "amazon-itemizer": None,
     "alert-steward": {"github": "cartwmic/alert-steward", "workflow": "image.yml", "since": "9b95071dd212360423d2085b1f21098e9612957a"},   # 2026-11-23
     "storycraft": {"github": "StoryCraftTW/storycraft", "workflow": "ci.yml", "since": "8e81a25fdc1a5c876154ff1294f8dfdf45dec903",   # 2026-11-23
-                  "squash_body": "the PR body"},   # storycraft squashes from the PR body; the other repos squash from the commit messages
+                  "squash_body": "the PR body"},
     "retro": {"github": "cartwmic/retro", "workflow": "unit.yml", "since": "2c7f2818121de5513b169f1e3d89fc87de689553"},   # 2026-11-22
     "budget-steward": {"gitea": "cartwmic/budget-steward", "kgate": "budget-steward"},   # on the homelab Gitea: no CI runner; gated on Gitea status or a full-suite kgate run
     "eval-cases": {"github": "cartwmic/eval-cases", "no_ci": True},   # private, no CI, no required checks possible: gated on review verify + pr-body-check
@@ -1191,9 +1198,39 @@ def hidden_reds(spec, tip, newest_created, newest_red, note):
     return sorted(reds, key=lambda red: -red[1].run_id)
 
 
+SQUASH_PLACES = {"PR_BODY": "body", "COMMIT_MESSAGES": "messages", "BLANK": "blank"}
+SQUASH = {}   # repo -> squash_source(spec)'s answer, read once a call
+
+
+def squash_source(spec):
+    """(place, source, note): where a squash merge of this repo carries a link line to main, read once a call from GitHub's squash_merge_commit_message.
+
+    place: "body" (PR_BODY: the PR description), "messages" (COMMIT_MESSAGES: the PR's commit messages) or "blank" (BLANK: neither, so no line reaches main).
+    source: what the log records: PR_BODY, COMMIT_MESSAGES, BLANK, or "fixed:<the row's value>" when the setting could not be read (a missing field, which a token that
+    cannot write contents sees, or a failed call): the row's `squash_body`, else the commit messages. note: one line for the output when it fell back or is BLANK, else None.
+    """
+    repo = spec["github"]
+    if repo not in SQUASH:
+        fixed = spec.get("squash_body", "the commit messages")
+        try:
+            setting = gh(["api", f"repos/{repo}"]).get("squash_merge_commit_message")
+            why = None if setting in SQUASH_PLACES else f"it is {setting!r}"
+        except (Unreadable, AttributeError) as e:
+            setting, why = None, str(e)
+        if why:
+            SQUASH[repo] = ("body" if spec.get("squash_body") else "messages", f"fixed:{fixed}",
+                            f"squash-source: could not read {repo}'s squash_merge_commit_message ({why}); using the row's fixed value, {fixed}")
+        else:
+            note = (f"squash-source: {repo} squashes with a blank message (BLANK): a squash commit carries neither the commit messages nor the PR description, "
+                    "so no `Handles:` line can reach main") if setting == "BLANK" else None
+            SQUASH[repo] = (SQUASH_PLACES[setting], setting, note)
+    return SQUASH[repo]
+
+
 def link_place(name, spec):
-    """Where a link line must be to reach main: the squash merge writes the commit messages, or (storycraft) the PR body. Said in the hidden-red block and in a refusal."""
-    return f"the PR description ({name} squashes from the PR body)" if spec.get("squash_body") else "the fix's commit message"
+    """Where a link line must be to reach main (squash_source), or None when none can (BLANK). Said in the hidden-red block and in a refusal."""
+    place = squash_source(spec)[0]
+    return {"body": f"the PR description ({name} squashes from the PR body)", "messages": "the fix's commit message", "blank": None}[place]
 
 
 def quicker_way(spec, reds, unfinished):
@@ -1231,9 +1268,12 @@ def hidden_block(name, spec, reds, advice=None):
     lines = [f"{name}: RED  {len(reds)} unhandled red(s) on main"] + ([f"  {advice}"] if advice else [])
     for sha, rec, subject in reds:
         lines.append(f"  {rec.label} failed on {sha[:7]} {subject}: no later commit on main links it, no rerun passed")
-        lines.append(f"    to clear it, put this line in {where}:")
-        lines.append(f"      Handles: {sha}")
-        lines.append(f"    or rerun: `gh run rerun {rec.run_id} --repo {spec['github']}`")
+        if where:
+            lines.append(f"    to clear it, put this line in {where}:")
+            lines.append(f"      Handles: {sha}")
+        lines.append(f"    {'or ' if where else ''}rerun: `gh run rerun {rec.run_id} --repo {spec['github']}`")
+    if not where:
+        return lines + ["  no `Handles:` line can clear it: this repo's squash merge writes a blank message"]
     return lines + (["  " + issue_rule(spec)] if spec.get("handles_labels") else []) + ["  a short sha does not count: the gate links only the full 40-character sha"]
 
 
@@ -1340,8 +1380,11 @@ def judge_run(repo, run, wanted):
 
 
 def link_texts(spec, pull):
-    """The texts a squash merge will carry into main's commit message: the PR's commit messages, or its description for a repo that squashes from the PR body."""
-    if spec.get("squash_body"):
+    """The texts a squash merge will carry into main's commit message (squash_source): the PR's commit messages, or its description; none for BLANK."""
+    place = squash_source(spec)[0]
+    if place == "blank":
+        return []
+    if place == "body":
         return [pull["body"] or ""]
     return [f"{c['messageHeadline']}\n\n{c['messageBody']}" for c in pull["commits"]]
 
@@ -1399,6 +1442,9 @@ def red_fix_reason(name, spec, reds, pr):
     """
     repo = spec["github"]
     try:
+        if squash_source(spec)[0] == "blank":
+            return refuse(pr, f"{repo} squashes with a blank message (BLANK), so a `Handles:` line cannot reach main: no PR clears a red by naming it. Fix the cause of the red, "
+                              "or set squash_merge_commit_message to PR_BODY or COMMIT_MESSAGES.", rule="blank-squash")
         pull = gh(["pr", "view", str(pr), "-R", repo, "--json", "headRefOid,headRefName,commits,body"])
         named, unbacked = named_reds(spec, pull)
         missing = [(sha, rec) for sha, rec in reds if sha not in named]
@@ -1958,13 +2004,16 @@ def log_hidden(name, spec, action, pr, started, code, lines, rec):
     said no as {"rule", "why"}: the sentence stderr carries) and quicker (null, or for a repo with "main_queue" and a hidden red the way the
     message named as quicker: "handles", "rerun" or "wait"), handles_issues (null, or for a --pr call on a repo that asks an issue of a
     Handles line, {red sha: issue number} for each Handles line an issue backed; a refusal for a Handles line with no issue has the rule "handles-no-issue")
-    pin_lag (null, or the `pin-lag:` line a --merge-gate dotfiles call printed) and pin_lag_error (null, or why the pin-lag issue could not be read)."""
+    pin_lag (null, or the `pin-lag:` line a --merge-gate dotfiles call printed) and pin_lag_error (null, or why the pin-lag issue could not be read),
+    squash_source (null, or what squash_source used: PR_BODY, COMMIT_MESSAGES, BLANK or "fixed:<value>"), repo_settings (null, or the `repo-settings:` line a --merge-gate
+    call printed) and repo_settings_error (null, or why the repo-settings issues could not be read)."""
     m = VERDICT_WORD.match(lines[0]) if lines else None
     append_log(hidden_log_path(),
                {"ts": utc(started), "duration_ms": round((time.time() - started) * 1000), "repo": spec["github"], "action": action, "pr": pr,
                 "verdict": m.group(1) if m else "ERROR", "exit": code, "hidden": rec.get("hidden", []), "cache": rec.get("cache"),
                 "reads": READS[0], "skipped": rec.get("skipped"), "passed_by": rec.get("passed_by"), "refused": rec.get("refused"),
-                "quicker": rec.get("quicker"), "handles_issues": rec.get("handles_issues"), "pin_lag": rec.get("pin_lag"), "pin_lag_error": rec.get("pin_lag_error")})
+                "quicker": rec.get("quicker"), "handles_issues": rec.get("handles_issues"), "pin_lag": rec.get("pin_lag"), "pin_lag_error": rec.get("pin_lag_error"),
+                "squash_source": rec.get("squash_source"), "repo_settings": rec.get("repo_settings"), "repo_settings_error": rec.get("repo_settings_error")})
 
 
 VERDICT_WORD = re.compile(r"^[^:]+: (GREEN|RED|UNTESTED|ERROR)\b")
@@ -2073,23 +2122,47 @@ def pin_lag_line():
         return None, f"{type(e).__name__}: {e}"[:200]
 
 
+def repo_settings_line(repo):
+    """(the one `repo-settings:` warning line for the open repo-settings issue of dotfiles that names `repo`, or None; the reason it could not be read, or None).
+    Like pin_lag_line: a warning only, never a change to the gate's exit code. A read that fails is (None, its reason), kept in the run log."""
+    try:
+        issues = gh(["issue", "list", "--repo", PIN_LAG_REPO, "--label", "repo-settings", "--state", "open", "--limit", "100", "--json", "title,createdAt,url"])
+        for issue in issues:
+            if issue["title"].startswith(f"Repo settings: {repo} "):
+                return f"repo-settings: {issue['title'].removeprefix('Repo settings: ')}, open {lag_age(issue['createdAt'])} ({issue['url']})", None
+        return None, None
+    except (Unreadable, KeyError, TypeError, ValueError, AttributeError) as e:
+        return None, f"{type(e).__name__}: {e}"[:200]
+
+
 def describe(name, tip_only=False, pr=None, gate=False, merge_gate=False):
     """Run one repo. A state it cannot read is one ERROR line and exit 1; the other repos still run."""
     spec = REPOS[name]
     rec = {}
     started = time.time()
     try:
+        if merge_gate and hidden_since(spec) and spec.get("github"):
+            squash_source(spec)
         code, lines = check(name, tip_only, pr, gate, rec)
     except Unreadable as e:
         code, lines = 1, [f"{name}: ERROR  cannot read state: {e}"]
     except Exception as e:   # a shape gh did not promise: one line on stdout, the traceback on stderr
         traceback.print_exc(file=sys.stderr)
         code, lines = 1, [f"{name}: ERROR  cannot read state: unexpected {type(e).__name__}: {e}"]
+    if spec and spec.get("github") and spec["github"] in SQUASH:
+        rec["squash_source"] = SQUASH[spec["github"]][1]
+        if merge_gate and SQUASH[spec["github"]][2]:
+            lines = [*lines, SQUASH[spec["github"]][2]]
     if merge_gate and name == "dotfiles":
         lag, rec["pin_lag_error"] = pin_lag_line()
         rec["pin_lag"] = lag
         if lag:
             lines = [*lines, lag]
+    if merge_gate and hidden_since(spec) and spec.get("github"):
+        settings, rec["repo_settings_error"] = repo_settings_line(spec["github"])
+        rec["repo_settings"] = settings
+        if settings:
+            lines = [*lines, settings]
     if spec and "gitea" in spec:
         log_gitea(name, spec, "merge-gate" if gate else "tip" if tip_only else "status", pr if gate else None, started, code, lines, rec)
     if hidden_since(spec):
