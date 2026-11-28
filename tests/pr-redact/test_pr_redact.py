@@ -116,10 +116,20 @@ class PrRedact(unittest.TestCase):
         result = self.run_cmd()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.stored(), "Asked by the owner, a private id, in a private folder. the owner again.\n")
+        self.set_pr("a1 b2 c3\n")
+        self.write_reps("a1\tthe home folder\nb2\tan internal host\nc3\ta private address\n")
+        self.assertEqual(self.run_cmd().returncode, 0)
+        self.assertEqual(self.stored(), "the home folder an internal host a private address\n")
         self.set_pr("Asked by Pat.\n")
         self.write_reps("Pat\tthe boss\n")
         self.assertEqual(self.run_cmd().returncode, 1)
         self.assertEqual(self.stored(), "Asked by Pat.\n")
+
+    def test_help_lists_every_neutral_phrase(self):
+        result = subprocess.run([sys.executable, str(SCRIPT), "--help"], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0)
+        for phrase in ("the home folder", "an internal host", "a private address", "the owner", "a private id", "a private folder"):
+            self.assertIn('"%s"' % phrase, result.stdout)
 
     def test_the_call_goes_through_gh_api_with_the_caller_named_and_the_body_from_a_file(self):
         self.run_cmd()
