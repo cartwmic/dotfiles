@@ -1,7 +1,7 @@
 #!/bin/sh
 # Linux checks for this repo, the same command the CI `tests` job runs: the six node tests, then every
 # Linux Python suite through scripts/ci-par.py (tests/heavy-gate one test per process, the rest one
-# discover process per suite), then tests/kgate and tests/pi-mcp-lazy alone, as two processes at once.
+# discover process per suite), then tests/kgate in four processes and tests/pi-mcp-lazy, each with its one timing-bound test run alone.
 #
 # Installs nothing. It assumes these are on PATH: chezmoi (the render tests), zsh, lsof and rsync (the
 # agent-scratch, zshenv and agent-docker tests), node, and python3 (3.14). tests/omarchy-remote-unlock also
@@ -147,18 +147,28 @@ python3 scripts/ci-par.py \
   tests/untested-hunks-check \
   tests/skill-scripts || status=1
 
-# tests/kgate and tests/pi-mcp-lazy run after the pool, as two processes at once, and not in the pool: their
-# timing-bound tests (test_a_quota_that_never_frees_is_69_at_the_deadline_with_the_message in kgate,
-# test_second_stop_still_reaches_a_helper_reparented_by_the_first in pi-mcp-lazy) fail under pool load.
-# Each suite streams into its own log file. The files stay on disk, so a hang or a cancel still leaves what
-# each one printed. Both logs print in full, kgate's first, once both have finished.
+# tests/kgate and tests/pi-mcp-lazy run after the pool, not in it: each has a timing-bound test (test_a_quota_that_never_frees_is_69_at_the_deadline_with_the_message
+# in kgate, test_second_stop_still_reaches_a_helper_reparented_by_the_first in pi-mcp-lazy) that fails under pool load.
+# First those two tests, as two processes at once: kgate's one test, and all of pi-mcp-lazy. Each streams into its own log file. The
+# files stay on disk, so a hang or a cancel still leaves what each one printed. Then the other 611 kgate tests, in four processes
+# (every fourth test id to each: the slow ones spread), their counts summed in ci-par's "suite counts". kgate's tests start from a
+# script rendered through chezmoi when their module is imported: render it once here and share it through KGATE_SCRIPT, not
+# once per process. A value already set stays. Both logs print in full, kgate's first, once all of it has finished.
+if [ -z "${KGATE_SCRIPT:-}" ]; then
+  KGATE_SCRIPT=$(python3 -c 'import sys; sys.path.insert(0, "tests/kgate"); import test_kgate; print(test_kgate.SCRIPT)')
+  export KGATE_SCRIPT
+  kgate_script_dir=$(dirname "$KGATE_SCRIPT")
+  trap 'rm -rf "$kgate_script_dir"' EXIT
+fi
+kgate_timing=test_kgate.KubectlBlack.test_a_quota_that_never_frees_is_69_at_the_deadline_with_the_message
 logs=$(mktemp -d "${TMPDIR:-/tmp}/ci-linux-logs.XXXXXX")
 echo "[ci-linux] per-suite logs: $logs"
-python3 -m unittest discover -s tests/kgate -v >"$logs/kgate.log" 2>&1 &
+(cd tests/kgate && exec python3 -m unittest -v "$kgate_timing") >"$logs/kgate.log" 2>&1 &
 kgate_pid=$!
 python3 -m unittest discover -s tests/pi-mcp-lazy -v >"$logs/pi-mcp-lazy.log" 2>&1 &
 lazy_pid=$!
 wait "$kgate_pid" || status=1
 wait "$lazy_pid" || status=1
+python3 scripts/ci-par.py --shards 4 tests/kgate --hold "$kgate_timing" || status=1
 cat "$logs/kgate.log" "$logs/pi-mcp-lazy.log"
 exit "$status"
