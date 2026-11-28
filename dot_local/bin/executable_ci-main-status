@@ -221,8 +221,7 @@ Where the line lands: the gate asks GitHub (one `gh api repos/OWNER/REPO` read a
 PR_BODY: the line goes in the PR description. COMMIT_MESSAGES: in a commit message of the fix PR. BLANK: a squash commit carries neither, so no line
 can reach main; a fix that needs one (every fix by the named-red rule) is refused with that reason, and the gate prints one "squash-source:" line saying so.
 When the setting cannot be read (a token that cannot write contents does not see it, or the call fails) the gate prints one "squash-source:" line saying so and
-uses the fixed value in the repo's row: `squash_body` ("the PR body": storycraft, loop-engine) or, without it, the commit messages. Every call of a repo with a
-"since" logs what it used as "squash_source": PR_BODY, COMMIT_MESSAGES, BLANK or "fixed:<the row's value>". A plain merge commit also works: the script reads every commit that reaches main, the branch commits a merge brings in included, so the
+uses the fixed value in the repo's row: `squash_body` ("the PR body": storycraft, loop-engine) or, without it, the commit messages. Every call that needs a link place logs what it used as "squash_source" (null when none was needed): PR_BODY, COMMIT_MESSAGES, BLANK or "fixed:<the row's value>". A plain merge commit also works: the script reads every commit that reaches main, the branch commits a merge brings in included, so the
 line in any of them (or in the merge commit's own message) counts. The coordinator's journal path is not part of
 this rule. A merge driver that passes its own --body must carry the line.
 If the fix merged without the line, do not rerun the old run (the old tree still fails): put the line in the squash message of a later small
@@ -1199,7 +1198,7 @@ def hidden_reds(spec, tip, newest_created, newest_red, note):
 
 
 SQUASH_PLACES = {"PR_BODY": "body", "COMMIT_MESSAGES": "messages", "BLANK": "blank"}
-SQUASH = {}   # repo -> squash_source(spec)'s answer, read once a call
+SQUASH = {}
 
 
 def squash_source(spec):

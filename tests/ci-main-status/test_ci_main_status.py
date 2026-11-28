@@ -153,7 +153,7 @@ GH_FAKE = textwrap.dedent('''\
             if notes is None:
                 fail("HTTP 404: no annotations fixture for " + path)
             print(json.dumps(notes))
-        elif path == "repos/" + repo:   # the repo's settings: squash_merge_commit_message is what each repo had before the change; fixture["squash"][repo] None leaves the field out, "fail:MSG" fails
+        elif path == "repos/" + repo:   # fixture["squash"][repo]: None leaves squash_merge_commit_message out, "fail:MSG" fails the call
             squash = (fixture.get("squash") or {}).get(repo, "PR_BODY" if repo.endswith("/storycraft") else "COMMIT_MESSAGES")
             if squash and squash.startswith("fail:"):
                 fail(squash[5:])
@@ -1695,10 +1695,13 @@ class PinLagLine(Fixture):
     def test_only_the_merge_gate_of_dotfiles_reads_the_issue(self):
         self.runs = {"cartwmic/dotfiles|ci.yml": [run(1, self.c3, "success")], "cartwmic/loop-engine|ci.yml": [run(1, self.c3, "success")]}
         self.reply = {"issue list": lag_issue(self.TITLE, datetime.timedelta(hours=1))}
-        for args in (("dotfiles",), ("--tip", "dotfiles"), ("--merge-gate", "loop-engine")):
+        for args in (("dotfiles",), ("--tip", "dotfiles")):
             with self.subTest(args=args):
                 rc, out = self.status(*args)
                 self.assertEqual(self.lines(out), [], out)
+        self.assertNotIn("issue list", self.log.read_text())
+        rc, out = self.status("--merge-gate", "loop-engine")
+        self.assertEqual(self.lines(out), [], out)
         self.assertNotIn("--label pin-lag", self.log.read_text())
         self.assertEqual(len(self.lines(self.status("--all", "--merge-gate")[1])), 1)
 
