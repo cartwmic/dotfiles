@@ -229,6 +229,77 @@ class MergeCheckTest(unittest.TestCase):
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertIn("is not a git clone", done.stderr)
 
+    def main_fixes_the_page(self):
+        """A fix lands on dotfiles main: the citation that moved now points at the new text."""
+        self.world.change("dotfiles", CONTENT, self.content("[[coordinator:package.json|" + GOOD_SNIPPET, "[[coordinator:package.json|" + RENAMED))
+
+    def records(self):
+        log = self.home / ".local/state/stack-map-merge-check/log.jsonl"
+        return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+
+    def test_a_pr_cut_before_a_fix_on_main_passes_because_the_fix_is_in_the_merge_result(self):
+        """The 2026-11-28 case: main's page was broken by a moved quote, the fix merged, and a PR cut before the fix touched no page file. Its head alone fails the build; merged with main it does not."""
+        self.moved_coordinator()
+        self.pull_request(20, {"README.md": "# Dotfiles\n\nPersonal dotfiles managed with [chezmoi](https://www.chezmoi.io/) and mise. More words.\nA line.\n"})
+        self.main_fixes_the_page()
+        done = self.check(20)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("builds with this PR merged with main", done.stdout)
+        self.assertEqual(self.records()[-1]["outcome"], "passed")
+
+    def test_the_same_pr_before_the_fix_is_only_warned(self):
+        self.moved_coordinator()
+        self.pull_request(21, {"README.md": "# Dotfiles\n\nPersonal dotfiles managed with [chezmoi](https://www.chezmoi.io/) and mise. More words.\nA line.\n"})
+        done = self.check(21)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("warning: the stack map page does not build with this PR merged with main", done.stderr)
+        self.assertEqual(self.records()[-1]["outcome"], "warned")
+
+    def test_a_pr_that_conflicts_with_main_is_exit_2_and_says_to_merge_main_first(self):
+        self.pull_request(22, {"README.md": self.world.read("dotfiles", "README.md").replace("# Dotfiles", "# From the PR")})
+        self.world.change("dotfiles", "README.md", self.world.read("dotfiles", "README.md").replace("# Dotfiles", "# From main"))
+        done = self.check(22)
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("conflicts with main", done.stderr)
+        self.assertIn("merge main into the PR first", done.stderr)
+        self.assertEqual(self.records()[-1]["outcome"], "error")
+
+    def test_a_fix_on_main_does_not_excuse_a_pr_that_breaks_a_cited_dotfiles_file(self):
+        self.moved_coordinator()
+        self.pull_request(23, {"README.md": self.world.read("dotfiles", "README.md").replace("# Dotfiles", "# Home")})
+        self.main_fixes_the_page()
+        done = self.check(23)
+        self.assertRefused(done, "dotfiles:README.md:0: snippet", "a failing citation names a file this PR changed (README.md)")
+        self.assertNotIn("coordinator:package.json", done.stderr)
+
+    def test_a_pr_that_deletes_a_cited_dotfiles_file_is_refused(self):
+        self.pull_request(24, {}, remove=["README.md"])
+        self.assertRefused(self.check(24), "dotfiles:README.md", "a failing citation names a file this PR changed (README.md)")
+
+    def test_a_pr_that_renames_a_cited_dotfiles_file_is_refused_for_the_old_name(self):
+        """git's own rename detection lists only the new name; the citation still names the old one."""
+        self.pull_request(29, {"README-renamed.md": self.world.read("dotfiles", "README.md")}, remove=["README.md"])
+        self.assertRefused(self.check(29), "a failing citation names a file this PR changed (README.md)")
+
+    def test_a_failing_citation_in_a_file_the_pr_did_not_change_is_a_warning_even_when_the_pr_changes_another_cited_file(self):
+        self.moved_coordinator()
+        self.pull_request(25, {"README.md": "# Dotfiles\n\nPersonal dotfiles managed with [chezmoi](https://www.chezmoi.io/) and mise. Longer.\nA line.\n"})
+        done = self.check(25)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("coordinator:package.json:0: snippet", done.stderr)
+
+    def test_each_run_logs_the_page_files_it_touched_and_the_changed_files_a_citation_names(self):
+        self.pull_request(26, {"README.md": self.world.read("dotfiles", "README.md").replace("# Dotfiles", "# Home")})
+        self.assertEqual(self.check(26).returncode, 1)
+        self.pull_request(27, {CONTENT: self.content(GOOD_SNIPPET, '"name": "no such text"')})
+        self.assertEqual(self.check(27).returncode, 1)
+        self.pull_request(28, {})
+        self.assertEqual(self.check(28).returncode, 0)
+        refused_readme, refused_page, passed = self.records()
+        self.assertEqual((refused_readme["touched"], refused_readme["cited_changed"]), ([], ["README.md"]))
+        self.assertEqual((refused_page["touched"], refused_page["cited_changed"]), ([CONTENT], []))
+        self.assertEqual((passed["touched"], passed["cited_changed"]), ([], []))
+
 
 if __name__ == "__main__":
     unittest.main()

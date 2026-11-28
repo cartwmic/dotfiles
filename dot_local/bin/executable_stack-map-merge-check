@@ -4,17 +4,17 @@
 REPO is `cartwmic/dotfiles` or `dotfiles`. Run by `pr-body-check REPO PR` (the merge form) before the coordinator's body checks, so a page
 break is refused for its own reason and the `&&` merge chain stops.
 
-It builds the real page twice at most (docs/stack-map/README.md, "Before a merge"):
-  head  the PR's head commit stands in for dotfiles origin/main, with the PR's own generator, content.md and fact files; the other three
-        repositories are read at their origin/main after a fetch;
-  base  dotfiles origin/main as it is now, built the same way. Built only when the head build fails.
+It builds the real page once (docs/stack-map/README.md, "Before a merge"): the PR merged with dotfiles origin/main, the way GitHub's own
+pull-request runs build it, so a fix already on main counts and a PR that is only behind main is not blamed for it. The merge result stands in for dotfiles
+origin/main, with its generator, content.md and fact files; the other three repositories are read at their origin/main after a fetch.
 
-Refuse (exit 1) when the head build fails and either the base build passes or the PR touches the page's own files. A head build that
-fails because another repository moved (the base fails too, and the PR touches none of the page's files) is a warning, exit 0. Exit 2:
-the check could not run (gh or any git command fails or cannot start, a clone or the scratch clone is missing, the head moved while
-checking, the page build ran over 600 seconds, or the call was wrong: the usage error). Nothing is written under ~/.local/state/stack-map, no network is used beyond
-`gh pr view` and `git fetch`, and the primary clone is only fetched into: never checked out or changed in its working tree.
-Every run adds one JSON line to $XDG_STATE_HOME/stack-map-merge-check/log.jsonl (default ~/.local/state): the PR, its head, the outcome and the failure lines.
+Refuse (exit 1) when that build fails and the PR is to blame: it changed one of the page's own files, or a failing citation names a dotfiles
+file the PR changed (edited, deleted or renamed). A build that fails for any other reason (another repository moved, or a dotfiles file the PR did not
+change) is a warning, exit 0. Exit 2: the check could not run (gh or any git command fails or cannot start, a clone or the scratch clone is
+missing, the head moved while checking, the PR conflicts with main so there is no merge result to build (merge main into the PR first), the page build
+ran over 600 seconds, or the call was wrong: the usage error). Nothing is written under ~/.local/state/stack-map, no network is used beyond
+`gh pr view` and `git fetch`, and the primary clone is only fetched into (plus the merge commit's objects): never checked out or changed in its working tree.
+Every run adds one JSON line to $XDG_STATE_HOME/stack-map-merge-check/log.jsonl (default ~/.local/state): the PR, its head, the outcome, the failure lines, the page files the PR touched and the failing citations that name a file it changed.
 """
 
 import json
@@ -30,7 +30,7 @@ from pathlib import Path
 
 REPOS = ("coordinator", "agent-kit", "loop-engine")
 GENERATOR = "dot_local/user_scripts/executable_stack_map.py"
-# The PR's own page files: a change to any of these is judged by the head build alone, even when main's page is already broken.
+# The PR's own page files: a PR that changes any of these answers for a failing build, even when main's page is already broken.
 PAGE_PATHS = ("docs/stack-map/", GENERATOR, "tests/stack-map/")
 FIX = "this PR breaks the stack map page build: fix content.md or the generator, or the cited code"
 BUILD_SECONDS = 600
@@ -90,6 +90,30 @@ def build(label, generator_text, dotfiles_sha, home_clone, repos_dir, work):
     return False, lines, 0
 
 
+CITATION_LINE = re.compile(r"^(?P<repo>[\w.-]+):(?P<path>[^:]+):\d+: ")
+
+
+def cited_files(lines):
+    """The dotfiles paths that failing generator lines (`repo:path:line: message`) name."""
+    found = (CITATION_LINE.match(line) for line in lines)
+    return sorted({m["path"] for m in found if m and m["repo"] == "dotfiles"})
+
+
+def merge_result(primary, base, head):
+    """A commit of the PR merged with `base`, as GitHub's pull-request runs build it. A conflict is a Stop(2)."""
+    done = run(["git", "-C", str(primary), "merge-tree", "--write-tree", "--no-messages", base, head])
+    if done.returncode == 1:
+        raise Stop(2, "stack-map-merge-check: the PR conflicts with main, so there is no merge result to build: merge main into the PR first")
+    if done.returncode != 0:
+        raise Stop(2, "stack-map-merge-check: git merge-tree failed: %s" % (" ".join(done.stderr.split()) or "no output"))
+    ident = {"GIT_AUTHOR_NAME": "stack-map-merge-check", "GIT_AUTHOR_EMAIL": "stack-map-merge-check@localhost", "GIT_COMMITTER_NAME": "stack-map-merge-check",
+             "GIT_COMMITTER_EMAIL": "stack-map-merge-check@localhost"}
+    made = run(["git", "-C", str(primary), "commit-tree", done.stdout.split()[0], "-p", base, "-p", head, "-m", "merge result"], env={**os.environ, **ident})
+    if made.returncode != 0:
+        raise Stop(2, "stack-map-merge-check: git commit-tree failed: %s" % (" ".join(made.stderr.split()) or "no output"))
+    return made.stdout.strip()
+
+
 def generator_at(clone, rev):
     done = run(["git", "-C", str(clone), "show", "%s:%s" % (rev, GENERATOR)])
     return done.stdout if done.returncode == 0 else None
@@ -114,33 +138,37 @@ def check(pr, record):
         for name in REPOS:
             git(repos_dir / name, "fetch", "-q", "origin", "main")
         base = git(primary, "rev-parse", "--verify", "origin/main^{commit}")
-        changed = git(primary, "diff", "--name-only", "origin/main..." + sha).splitlines()
+        changed = git(primary, "diff", "--name-only", "--no-renames", "origin/main..." + sha).splitlines()
         touched = sorted(path for path in changed if path.startswith(PAGE_PATHS))
+        record["touched"], record["cited_changed"] = touched, []
+        merged = merge_result(primary, base, sha)
         work_parent = home / "tmp"
         work_parent.mkdir(parents=True, exist_ok=True)
         work = Path(tempfile.mkdtemp(prefix="stack-map-merge-check-", dir=str(work_parent)))
         try:
-            ok, lines, count = build("head", generator_at(primary, sha), sha, primary, repos_dir, work)
-            if ok:
-                print("stack-map-merge-check: the stack map page builds with this PR (%s), %d citations verified" % (sha[:7], count))
-                record.update(outcome="passed", citations=count)
-                return 0
-            base_ok, base_lines, _ = build("base", generator_at(primary, base), base, primary, repos_dir, work)
+            ok, lines, count = build("merged", generator_at(primary, merged), merged, primary, repos_dir, work)
         finally:
             shutil.rmtree(work, ignore_errors=True)
     finally:
         git(primary, "update-ref", "-d", private, check=False)
-    record["failed"] = [line[:200] for line in lines]
-    if base_ok or touched:
+    if ok:
+        print("stack-map-merge-check: the stack map page builds with this PR merged with main (%s), %d citations verified" % (sha[:7], count))
+        record.update(outcome="passed", citations=count)
+        return 0
+    cited_changed = [path for path in cited_files(lines) if path in changed]
+    record.update(failed=[line[:200] for line in lines], cited_changed=cited_changed)
+    if touched or cited_changed:
         record["outcome"] = "refused"
         for line in lines:
             print(line, file=sys.stderr)
         print("stack-map-merge-check: %s" % FIX, file=sys.stderr)
         if touched:
             print("stack-map-merge-check: this PR changes the page's own files (%s)" % ", ".join(touched), file=sys.stderr)
+        if cited_changed:
+            print("stack-map-merge-check: a failing citation names a file this PR changed (%s)" % ", ".join(cited_changed), file=sys.stderr)
         return 1
     record["outcome"] = "warned"
-    print("stack-map-merge-check: warning: the stack map page does not build with this PR (%s), and does not build on main either; the PR changes none of the page's files, so it is not blocked. First failure: %s" % (sha[:7], lines[0]), file=sys.stderr)
+    print("stack-map-merge-check: warning: the stack map page does not build with this PR merged with main (%s); the PR changes none of the page's files and no failing citation names a file it changed, so it is not blocked. First failure: %s" % (sha[:7], lines[0]), file=sys.stderr)
     return 0
 
 
