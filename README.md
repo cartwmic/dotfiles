@@ -730,6 +730,40 @@ Known limits: when a script template does not render, `chezmoi status` fails, so
 To keep a local edit for good, adopt it: `chezmoi re-add PATH` (plain files) or change the template.
 Tests: `tests/dotfiles-update` (real chezmoi, scratch repository and HOME; the red control is plain `chezmoi apply` failing in the same state).
 
+## Applying a merged change: `dotfiles-apply`
+
+`dotfiles-apply` (personal profile only: it refuses on any other, and is not deployed there) is the one command that puts dotfiles on an agent machine. The rule it
+follows is "deploy only a commit `ci-main-status --tip` approves": a merge is not a deploy, and a bare `chezmoi apply` after a merge installs a commit whose tests may
+not have finished (and may be half of a change). Builders, leads, the Loop Engine and agent-kit bump tools call it; nothing else should apply on a shared machine.
+
+    dotfiles-apply --contains <merge commit> <destination path>...    # a change: only its own paths
+    dotfiles-apply --contains <merge commit> --whole-commit           # everything pending in the tested commit
+    dotfiles-apply                                                    # bring the machine to the newest tested commit
+    dotfiles-apply --dry-run ...                                      # ask the gate, say what it would do, change nothing
+
+- It asks `ci-main-status --tip dotfiles --contains <commit>` for a tested main commit that contains your merge (after a squash merge, the merge commit; with no `--contains`,
+  the checkout's base). The gate says no until the main run that covers your merge has passed (a run cancelled by a newer push is covered by the next one). Then nothing is
+  applied and the command exits 1: wait, and run it again.
+- It moves the chezmoi source checkout to that tested commit by fast-forward, never to the tip, and stops, leaving the checkout alone, when it is not on `main`, has
+  uncommitted changes or has its own commits.
+- With paths it applies those paths only (each as itself, and a named directory also stands for the pending paths under it; the directories above a new one first; a script, named by the path `chezmoi status` shows,
+  through chezmoi so its run is recorded). It stops, applying nothing, when anything else is pending that you did not name, and lists it. `--whole-commit` (or no paths)
+  takes everything pending, by `dotfiles-update --no-pull`, which holds back a path edited on the machine and says so. `--leave-pending PATH` (repeatable) names a path
+  that a later run applies, so it does not stop this one; the Loop Engine and agent-kit bump tools use it for the scripts a bump leaves for a full apply.
+- A change that is already on the machine is "nothing to do" and exit 0, and the line names the tested commit and the run that tested it (the log has both).
+- A Loop Engine bump and an agent-kit bump in one PR (`agent_kit_bump.py --pr N`) cannot each apply only their own files, because each leaves the other's pending: take the
+  tested merge once with `--whole-commit`, then run both tools again.
+- It shows `chezmoi diff`, applies, then exits 1 unless nothing it applied is still pending.
+- A stop file, `~/.local/state/dotfiles-apply/stop`, holds a run before it moves or applies anything: create it to hold an apply a tool is about to make, remove it to let runs go on.
+- Every run, refused ones too, is one line in `~/.local/state/dotfiles-apply/log.jsonl`: the time, the sha it was given, the tested commit, the CI run that tested it, the paths applied, the paths asked for and the ones left to a later run, the caller (the T3, Codex or
+  Claude session id) and the outcome (`applied`, `nothing-to-do`, `dry-run`, `untested`, `other-pending`, `stopped`, `still-pending`, ...). `grep '"outcome": "applied"'` answers "was this applied from a tested commit", and
+  `jq -s 'group_by(.outcome) | map({(.[0].outcome): length}) | add'` counts what ran and what was refused. If the command refuses with `untested` for more than two hours on a change whose own checks have
+  been green, the wait on main's run is the problem to fix, not the gate.
+- The pod start script that applies at every container start does not call it yet (it lives in the homelab repository). The hook rule that refuses a bare `chezmoi apply` in an agent session is a separate change.
+
+Tests: `tests/dotfiles-apply` (real chezmoi and git against a scratch source and HOME, and a stub gate that answers like the real one; `test_the_bad_day` is the past case),
+`tests/loop-engine-bump` and `tests/agent-kit-bump` (their apply step goes through the command).
+
 ## Renaming numbered videos (`video-rename`)
 
 Personal profile only, on macOS and Linux (which personal machine holds the videos is not decided). The work profile and the phone do not get it.

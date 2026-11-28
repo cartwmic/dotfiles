@@ -112,6 +112,12 @@ json.dump(state, open(path, "w"))
 FAKE_GATE = r'''#!/bin/sh
 # A scripted merge gate: logs its call to FAKE_CALL_LOG, and refuses when FAKE_GATE_REFUSE names it.
 echo "$(basename "$0") $*" >> "$FAKE_CALL_LOG"
+# `ci-main-status --tip dotfiles --contains SHA`, as dotfiles-apply asks it: green, on the tip of the fake origin's main (the merge commit, once there is one).
+if [ "$(basename "$0")" = ci-main-status ] && [ "$3" = "--contains" ] && [ -z "${FAKE_GATE_REFUSE:-}" ]; then
+  tip=$(git --git-dir "$FAKE_ORIGIN" rev-parse refs/heads/main)
+  echo "dotfiles: GREEN  run 1 passed on $(echo "$tip" | cut -c1-7), which contains $(echo "$4" | cut -c1-7); commit $tip"
+  exit 0
+fi
 if [ "${FAKE_GATE_REFUSE:-}" = "$(basename "$0")" ]; then
     echo "$(basename "$0"): RED on stdout"
     [ -z "${FAKE_GATE_SAY:-}" ] || echo "$FAKE_GATE_SAY"
@@ -158,6 +164,9 @@ class BumpTests(Fixture):
         for gate in ("ci-main-status", "pr-body-check"):
             (self.bin / gate).write_text(FAKE_GATE)
             (self.bin / gate).chmod(0o755)
+        for name in ("dotfiles-apply", "dotfiles-update"):  # the real commands: the bump tools apply through them
+            (self.bin / name).write_text('#!/bin/sh\nexec python3 "%s" "$@"\n' % (ROOT / "dot_local/bin" / ("executable_" + name)))  # git keeps dotfiles-update at mode 644: run it by its interpreter
+            (self.bin / name).chmod(0o755)
         (self.bin / "pr-record").write_text(FAKE_PR_RECORD)
         (self.bin / "pr-record").chmod(0o755)
         self.refuse = ""  # the name of a gate the next run should refuse
@@ -192,15 +201,16 @@ class BumpTests(Fixture):
                 "XDG_STATE_HOME": str(self.home / ".local/state"), "FAKE_GH_STATE": str(self.state_path),
                 "FAKE_MISE_STATE": str(self.dir / "mise.json"), "LOOP_ENGINE_BUMP_POLL_SECONDS": "0",
                 "FAKE_CALL_LOG": str(self.dir / "calls.log"), "FAKE_GH_ENV_LOG": str(self.dir / "gh-env.jsonl"),
-                "FAKE_GATE_REFUSE": self.refuse, "FAKE_TRACES_DIR": str(self.dir / "traces"), "TMPDIR": str(self.dir), **self.git_env}
+                "FAKE_ORIGIN": str(self.origin), "FAKE_GATE_REFUSE": self.refuse, "FAKE_TRACES_DIR": str(self.dir / "traces"), "TMPDIR": str(self.dir), **self.git_env}
 
     def sh(self, *cmd, cwd=None):
         result = subprocess.run([str(c) for c in cmd], cwd=cwd, env=self.env(), capture_output=True, text=True, timeout=120)
         self.assertEqual(result.returncode, 0, "%s: %s%s" % (cmd, result.stdout, result.stderr))
         return result.stdout
 
-    def world(self, profile="personal", extra=None, container=False):
-        """Origin with the seed plus one later unrelated commit; HOME applied from the seed commit. `container` makes it the agent host pod."""
+    def world(self, profile="personal", extra=None, container=False, unrelated_pending=False):
+        """Origin with the seed plus one later unrelated commit; HOME applied from the seed commit. `container` makes it the agent host pod. That later
+        commit is already on this machine (dotfiles-apply stops at anything pending that the PR did not make), unless `unrelated_pending`."""
         self.sh("git", "init", "-q", "--bare", "-b", "main", self.origin)
         self.sh("git", "clone", "-q", self.origin, self.checkout)
         for path, text in {**self.seed, **(extra or {})}.items():
@@ -215,7 +225,7 @@ class BumpTests(Fixture):
         self.sh("git", "-C", self.checkout, "push", "-q", "origin", "main")
         config = self.home / ".config/chezmoi/chezmoi.yaml"
         config.parent.mkdir(parents=True)
-        config.write_text("data:\n  profile: %s\n%s" % (profile, "  container:\n    enabled: true\n" if container else ""))
+        config.write_text("sourceDir: %s\ndata:\n  profile: %s\n%s" % (self.checkout, profile, "  container:\n    enabled: true\n" if container else ""))
         self.sh("chezmoi", "--source", self.checkout, "--no-tty", "apply")
         self.sh("sh", self.checkout / "dot_local/user_scripts/executable_apply_harness_config.sh", "skills")
         # Harness settings the bump must leave alone (a full harness apply would rewrite them).
@@ -228,6 +238,8 @@ class BumpTests(Fixture):
         (other / "dot_unrelated").write_text("unrelated v2\n")
         self.sh("git", "-C", other, "commit", "-q", "-am", "unrelated")
         self.sh("git", "-C", other, "push", "-q", "origin", "main")
+        if not unrelated_pending:
+            (self.home / ".unrelated").write_text("unrelated v2\n")
         self.load()
         self.state.pop("calls", None)
         self.save()
@@ -318,7 +330,7 @@ class BumpTests(Fixture):
         for skipped in ("using-loop-engine/references/PRD.md", "using-research-provider/SKILL.md", "using-generate-prd/SKILL.md"):
             self.assertIsNone(self.live(SKILLS_DEST + "/" + skipped), skipped)  # the tag ships them; dotfiles does not import them
         self.assertEqual(self.live(SKILLS_DEST + "/my-own-skill/SKILL.md"), "mine\n")
-        self.assertEqual(self.live(".unrelated"), "unrelated v1\n")
+        self.assertEqual(self.live(".unrelated"), "unrelated v2\n")
         for harness in (".claude/skills", ".codex/skills", ".pi/agent/skills", ".agents/skills"):
             self.assertTrue((self.home / harness / "using-other").is_symlink(), harness)
         self.assertEqual(self.live(".codex/config.toml"), "# local edit\n")
@@ -332,7 +344,7 @@ class BumpTests(Fixture):
         lines = self.log_lines()
         self.assertEqual(len({line["id"] for line in lines}), 1)
         self.assertEqual([line["step"] for line in lines],
-                         ["profile", "pr", "import", "publish", "checks", "gates", "merge", "source", "drift", "apply",
+                         ["profile", "pr", "import", "publish", "checks", "gates", "merge", "drift", "apply",
                           "install", "verify"])
         self.assertTrue(all(line["outcome"] == "ok" and line["utc"].endswith("Z") for line in lines))
         self.assertEqual(len(self.sh("git", "-C", self.checkout, "worktree", "list").splitlines()), 1)
@@ -343,7 +355,7 @@ class BumpTests(Fixture):
         self.assertIn("resuming PR #100 (MERGED)", again.stdout)
         self.assertEqual(len(self.gh_calls("create")), 1)
         self.assertEqual(len(self.gh_calls("merge")), 1)
-        self.assertEqual(self.live(".unrelated"), "unrelated v1\n")
+        self.assertEqual(self.live(".unrelated"), "unrelated v2\n")
 
     POD_PIN = "# Generated by chezmoi from dot_config/mise/config.toml\n"
 
@@ -369,11 +381,11 @@ class BumpTests(Fixture):
         self.assertEqual(self.live(container), self.POD_PIN + 'gh = "latest"\n' + pins("1.0.0"))
         self.assertIsNone(self.live(".config/mise/config.toml"))  # still not created
         self.assertEqual(self.live(SKILLS_DEST + "/using-foo-provider/SKILL.md"), "foo skill v1\n")
-        self.assertEqual(self.live(".unrelated"), "unrelated v1\n")  # main's later unrelated change is not applied
+        self.assertEqual(self.live(".unrelated"), "unrelated v2\n")  # main's later unrelated change is not applied
         self.assertEqual(self.mise_installs()[-1], ["install", *TOOLS])
         self.assertIn("installed: loop-engine 1.0.0, lean-change 1.0.0, policy-document 1.0.0, bookends-check 1.0.0", result.stdout)
         self.assertEqual([line["step"] for line in self.log_lines()],
-                         ["profile", "pr", "import", "publish", "checks", "gates", "merge", "source", "drift", "apply", "install", "verify"])
+                         ["profile", "pr", "import", "publish", "checks", "gates", "merge", "drift", "apply", "install", "verify"])
         self.assertIn(str(self.home / container), self.log_lines()[-3]["detail"])  # the apply step's targets
 
     def test_d2_a_live_edit_to_the_pods_container_file_stops_before_apply(self):
@@ -435,8 +447,8 @@ class BumpTests(Fixture):
         self.world(container=True, extra=self.SCRIPTS)
         (self.home / "container-tools.fail").write_text("")
         result = self.bump()
-        self.assert_stopped(result, "scripts", "05_container_tools.sh failed")
-        self.assertIn("mise tools are still missing", result.stderr)
+        self.assert_stopped(result, "scripts", "dotfiles-apply exited 1")
+        self.assertIn("mise tools are still missing", result.stdout + result.stderr)
         self.assertEqual(self.live(".config/mise/conf.d/container.toml"), self.POD_PIN + 'gh = "latest"\n' + pins("1.0.0"))  # the apply and install had finished
         self.assertEqual(self.pending_scripts(), ["05_container_tools.sh", "06_other.sh"])  # not recorded, so chezmoi still lists it
         (self.home / "container-tools.fail").unlink()
@@ -706,13 +718,25 @@ class BumpTests(Fixture):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(self.checkout_head(), self.load()["prs"][0]["mergeCommit"]["oid"])
         self.assertEqual(self.sh("git", "-C", self.checkout, "status", "--porcelain"), "")
-        self.assertIn("source", [line["step"] for line in self.log_lines()])
+        self.assertIn("moved the source checkout", result.stdout)  # dotfiles-apply moved it, to the tested commit
+
+    def test_d3_another_merged_change_still_pending_stops_the_apply_and_nothing_of_it_is_applied(self):
+        self.world(unrelated_pending=True)
+        result = self.bump()
+        self.assert_stopped(result, "apply", "dotfiles-apply exited 1")
+        self.assertIn(".unrelated", result.stdout)
+        self.assertIn("settle that first", result.stderr)
+        self.assertEqual(self.live(".unrelated"), "unrelated v1\n")  # not applied by the bump
+        self.sh("chezmoi", "--source", self.checkout, "--no-tty", "apply", "-x", "scripts", self.home / ".unrelated")  # the person settles it
+        again = self.bump()
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
 
     def test_d3_a_source_checkout_that_cannot_fast_forward_stops_before_apply_and_a_rerun_applies(self):
         self.world()
         self.sh("git", "-C", self.checkout, "commit", "-q", "--allow-empty", "-m", "local only, not pushed")
         result = self.bump()
-        self.assert_stopped(result, "source", "cannot fast-forward the chezmoi source checkout")
+        self.assert_stopped(result, "apply", "dotfiles-apply exited 1")
+        self.assertIn("not behind the tested commit", result.stdout)
         self.assertEqual(self.load()["prs"][0]["state"], "MERGED")  # the merge happened; only the source is behind
         self.assert_nothing_applied()
         self.sh("git", "-C", self.checkout, "reset", "-q", "--hard", "origin/main")  # the fix a person makes
@@ -726,7 +750,8 @@ class BumpTests(Fixture):
         self.world()
         self.sh("git", "-C", self.checkout, "checkout", "-q", "-b", "wip")
         result = self.bump()
-        self.assert_stopped(result, "source", "is on wip, not main")
+        self.assert_stopped(result, "apply", "dotfiles-apply exited 1")
+        self.assertIn("is on wip, not main", result.stdout)
         self.assertEqual(self.load()["prs"][0]["state"], "MERGED")
         self.assert_nothing_applied()
         self.assertEqual(self.sh("git", "-C", self.checkout, "branch", "--show-current").strip(), "wip")

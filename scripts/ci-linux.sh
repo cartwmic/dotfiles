@@ -133,6 +133,9 @@ python3 scripts/ci-par.py \
   tests/rustdesk \
   tests/agent-browser \
   tests/dotfiles-update \
+  tests/dotfiles-apply \
+  tests/loop-engine-bump \
+  tests/agent-kit-bump \
   tests/agent-kill-guard \
   tests/config-show \
   tests/disposition-check \

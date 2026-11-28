@@ -215,9 +215,13 @@ On the `personal` profile, do approved work without asking again. The brief is
 the ask for the commits and pushes it names (playbook a1ffc2e3). A restart that
 the work needs is agent work (playbook c04b6a19). After a dotfiles PR merges
 under ledger grant 32 (reviewer PASS and green `tests` check first, and run
-`ci-main-status dotfiles` before the merge), apply only that PR's own targets:
-show the diff first, stop on any other drift, and confirm the diff is empty
-after. Still ask the owner before a one-way door (force-push, history rewrite
+`ci-main-status dotfiles` before the merge), apply only that PR's own targets,
+and only through `dotfiles-apply --contains <merge commit> <paths>`: it asks
+`ci-main-status --tip dotfiles --contains` for a tested main commit that holds
+the merge, moves this checkout to that commit, shows the diff, stops on any other
+pending change, and exits 1 unless nothing it applied is still pending. While the
+gate says no, wait for the main run; do not apply early (README, "Applying a
+merged change: `dotfiles-apply`"). Still ask the owner before a one-way door (force-push, history rewrite
 or anything else hard to undo), a purchase (hardware, subscriptions, paid
 services) or removing persistent user state: those stay reserved (playbook
 c04b6a19, 4b79e75c). On `axon-work-computer` and any other
