@@ -3,7 +3,7 @@
 
 The mistake: a test file is added (or a directory of them) and nobody lists it in the runner, so it never runs and can fail for months
 without anyone seeing it (the inspect-prompt tests: one failed on main for two months). A test file is one of
-  test_*.py and *_test.py       (Python unittest; a hyphen for the underscore, as in test-x.py, counts too)
+  test_*.py, test-*.py, *_test.py   (Python unittest; test-x.py counts because discover's default pattern matches it)
   *.test.{ts,tsx,mjs,js,cjs} and *.spec.{ts,tsx,mjs,js,cjs}   (node's test runner)
 anywhere under ROOT (default: the repository root), apart from .git, node_modules and __pycache__.
 
@@ -31,7 +31,7 @@ import re
 import sys
 
 SKIP_DIRS = {".git", "node_modules", "__pycache__"}
-PY_TEST = re.compile(r"^(test[_-].*|.*[_-]test)\.py$")  # `test-x.py` is a test file too: discover matches it, then skips it as unimportable
+PY_TEST = re.compile(r"^(test[_-].*|.*_test)\.py$")  # `test-x.py` is a test file too: discover matches it, then skips it as unimportable
 JS_TEST = re.compile(r"^.*\.(test|spec)\.(ts|tsx|mjs|js|cjs)$")
 MODULE_FILE = re.compile(r"^[_a-z]\w*\.py$", re.I)  # unittest discover skips a file whose name is not an importable module name (test-x.py)
 LIST = "scripts/ci-not-run.txt"
@@ -158,6 +158,7 @@ def main(argv):
         return 2
     for p in problems:
         print("check-ci-coverage: " + p)
+    print("check-ci-coverage: a test file is test_*.py, test-*.py, *_test.py, *.test.{ts,tsx,mjs,js,cjs} or *.spec.{ts,tsx,mjs,js,cjs}")
     print("check-ci-coverage: %d test files: %d run by CI, %d named in %s, %d neither" % (total, ran, left_out, LIST, total - ran - left_out))
     if not problems:
         print("check-ci-coverage: every test file is run by CI or named in %s" % LIST)
