@@ -2106,5 +2106,78 @@ class LiveGitWorkCheckout(unittest.TestCase):
         self.assertIsNone(self.work("git -C /Users/test/coordinator-work commit -m x", repo=None))
 
 
+class CheckMustGuard(unittest.TestCase):
+    """A check counts only when the command it guards runs on the check's success. `! check && cmd` runs cmd when the check refused, and `true || check && cmd` runs
+    it with the check skipped, so neither is a check; the plain `a && b && c` chain still is."""
+    GATE, BODY, MERGE = "ci-main-status --merge-gate o/r", "pr-body-check o/r 5", "gh pr merge 5 --squash"
+    F = "/tmp/comment.aB3xY9"
+    CHECK, POST = "public-text-check --repo cartwmic/dotfiles --file comment=" + F, "gh pr comment 5 --body-file " + F
+    ORIGINS = {"/work": "https://github.com/cartwmic/dotfiles.git"}
+
+    def merge(self, text):
+        return check(text)
+
+    def comment(self, text):
+        return check(text, origins=self.ORIGINS, visibility=lambda repo: "public")
+
+    def shapes(self, first, second, last):
+        """The shapes that must not count `first` (and, for a merge, `second`) as a check of `last`."""
+        return [
+            "! %s && %s && %s" % (first, second, last),                    # negated
+            "%s && ! %s && %s" % (second, first, last),
+            "%s && ! ! %s && %s" % (second, first, last),
+            "! %s && %s" % (first, last),
+            "%s || true && %s" % (first, last),                             # the exit status is dropped by `|| true`
+            "true || %s && %s" % (first, last),                             # the check is skipped when the left side passes
+            "%s && true || %s && %s" % (second, first, last),
+            "%s; %s" % (first, last),                                       # a new statement
+            "%s\n%s" % (first, last),
+            "(%s) && %s" % (first, last),                                   # a subshell or group
+            "( %s; true ) && %s" % (first, last),
+            "{ %s; } && %s" % (first, last),
+            "%s | cat && %s" % (first, last),                               # a pipe throws the exit status away
+            "%s |& cat && %s" % (first, last),
+            "%s | %s" % (first, last),                                      # the check runs beside the command, not before it
+            "%s & %s" % (first, last),                                      # in the background
+            "if ! %s; then %s; fi" % (first, last),                         # runs when the check refused
+            "if %s; then %s; fi" % (first, last),
+            "%s || %s" % (first, last),
+            "sh -c '! %s && %s'" % (first, last),                           # the same, in a nested shell
+            "%s && sh -c '! %s && %s'" % (second, first, last),
+        ]
+
+    def test_a_merge_after_a_check_that_does_not_guard_it_is_refused(self):
+        for text in self.shapes(self.BODY, self.GATE, self.MERGE) + self.shapes(self.GATE, self.BODY, self.MERGE):
+            with self.subTest(text=text):
+                self.assertIsNotNone(self.merge(text))
+
+    def test_the_refusal_says_what_makes_a_check_count(self):
+        sentence = "A check counts only when the command it guards runs on the check's success"
+        self.assertIn(sentence, self.merge("! %s && %s" % (self.BODY, self.MERGE)))
+        self.assertIn(sentence, self.comment("! %s && %s" % (self.CHECK, self.POST)))
+
+    def test_a_comment_after_a_check_that_does_not_guard_it_is_refused(self):
+        for text in self.shapes(self.CHECK, "true", self.POST):
+            with self.subTest(text=text):
+                self.assertIsNotNone(self.comment(text))
+
+    def test_the_plain_chain_and_the_shapes_that_guard_still_pass(self):
+        for text in ["%s && %s && %s" % (self.GATE, self.BODY, self.MERGE),
+                     "%s && %s && %s" % (self.BODY, self.GATE, self.MERGE),
+                     "%s &&\n %s &&\n %s" % (self.GATE, self.BODY, self.MERGE),
+                     "echo a || echo b && %s && %s && %s" % (self.GATE, self.BODY, self.MERGE),   # an earlier `||` is a different list
+                     "echo a; %s && %s && %s" % (self.GATE, self.BODY, self.MERGE),
+                     "(%s && %s && %s)" % (self.GATE, self.BODY, self.MERGE),
+                     "%s && %s && %s | tee /tmp/out" % (self.GATE, self.BODY, self.MERGE),
+                     "%s && %s && sh -c '%s'" % (self.GATE, self.BODY, self.MERGE)]:
+            with self.subTest(text=text):
+                self.assertIsNone(self.merge(text))
+        self.assertIsNone(self.comment("%s && %s" % (self.CHECK, self.POST)))
+        self.assertIsNone(self.comment("echo a || echo b && %s && %s" % (self.CHECK, self.POST)))
+
+    def test_the_check_that_is_negated_in_one_place_still_fails_the_chain_in_a_nested_shell(self):
+        self.assertIsNotNone(self.merge("%s && sh -c '! %s && %s'" % (self.GATE, self.BODY, self.MERGE)))
+
+
 if __name__ == "__main__":
     unittest.main()
