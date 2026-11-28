@@ -218,7 +218,7 @@ Every call of a repo with a "since" appends one JSON line to ${XDG_STATE_HOME:-~
 all three): ts (UTC), duration_ms, repo, action (status, tip, merge-gate), pr, verdict (the first line's word), exit, hidden (sha, run and
 attempt of each hidden red), cache (warm, cold, dropped:<why>, unwritable), reads (gh calls made), skipped ("newest red", when the
 hidden-red reads were skipped), passed_by (null, or for a --pr pass on a red main the rules that passed it: "pin-fix", "named-red+own-run") and refused
-(null, or for a --pr call that a red main refused, each rule that said no as {"rule", "why"}: the sentence on stderr, kept after the terminal is gone). A log that cannot be written is a stderr note and changes nothing. CI_MAIN_STATUS_SINCE replaces `since`
+(null, or for a --pr call that a red main refused, each rule that said no as {"rule", "why"}: the sentence on stderr, kept after the terminal is gone; a Handles line with no backing issue is the rule "handles-no-issue"), and handles_issues (null, or {red sha: issue number} for each Handles line an issue backed). A log that cannot be written is a stderr note and changes nothing. CI_MAIN_STATUS_SINCE replaces `since`
 (for tests).
 
 A failed attempt is untested, not red, when the only jobs in it that did not pass or skip were cancelled because no runner
@@ -314,6 +314,7 @@ WALK_CAP = 250
 RETRIES = 2                 # a gh call that answers HTTP 502, 503 or 504 is asked again, up to this many more times, 1 s then 2 s apart
 READS = [0]                 # gh calls made by this run; the hidden-red log records the count
 REFUSALS = []               # why each --pr rule refused PR N, as {"rule", "why"}; a refused call's hidden-red log row records them
+BACKING = {}                # red sha -> the issue number that backed its Handles line in this call (named_reds); the log row records it
 CALLER = "ci-main-status"   # every gh call names its caller (GH_CALLER); the gh wrapper's log records it
 URGENT = False              # set by main(): --merge-gate and --tip reads are urgent (GH_URGENT=1)
 
@@ -1275,9 +1276,9 @@ def pin_fix_reason(spec, red, pr):
         return refuse(pr, f"could not read it ({e})", PIN_FIX)
 
 
-def refuse(pr, why, kind=RED_FIX):
+def refuse(pr, why, kind=RED_FIX, rule=None):
     print(f"ci-main-status: --pr {pr} is not {kind} for this red: {why}", file=sys.stderr)
-    REFUSALS.append({"rule": "pin-fix" if kind == PIN_FIX else "named-red+own-run", "why": why})
+    REFUSALS.append({"rule": rule or ("pin-fix" if kind == PIN_FIX else "named-red+own-run"), "why": why})
     return None
 
 
@@ -1363,7 +1364,10 @@ def named_reds(spec, pull):
             continue
         named.update(REVERT.findall(text))
         for sha in set(HANDLES.findall(text)):
-            (named if backing_issue(spec, text, sha) else unbacked).add(sha)
+            issue = backing_issue(spec, text, sha)
+            if issue:
+                BACKING[sha] = issue
+            (named if issue else unbacked).add(sha)
     return named, unbacked - named
 
 
@@ -1390,7 +1394,8 @@ def red_fix_reason(name, spec, reds, pr):
                                           + (" (it has a Handles line, but its message names no issue on record for it)" if sha in unbacked else "")
                                           for sha, rec in missing)
                               + (". " + issue_rule(spec) if spec.get("handles_labels") else "")
-                              + ". No flake ruling is recorded for this repo's runs, so a red from a flaky test holds main until it is fixed or a rerun passes.")
+                              + ". No flake ruling is recorded for this repo's runs, so a red from a flaky test holds main until it is fixed or a rerun passes.",
+                          rule="handles-no-issue" if any(sha in unbacked for sha, _ in missing) else None)
         wanted = red_jobs_of(repo, [rec for _, rec in reds])
         head = pull["headRefOid"]
         tree = tree_of(repo, head)
@@ -1481,6 +1486,8 @@ def assess(name, repo, verdicts, going, noun="run", tip_only=False, trees=None, 
     reds = ([(newest_red, newest[2])] if newest_red else []) + [(sha, rec) for sha, rec, _ in hidden]
     if code == 1 and reds and pr is not None:
         allowed, pinned = judge_reds(name, spec, reds, pr)
+        if log is not None and BACKING:
+            log["handles_issues"] = dict(BACKING)   # for each red a Handles line cleared: the issue that backed it
         if not allowed and log is not None:
             log["refused"] = list(REFUSALS)   # which rule said no, and why, for the log: stderr is gone when the terminal is
         if allowed:
@@ -1934,13 +1941,14 @@ def log_hidden(name, spec, action, pr, started, code, lines, rec):
     skipped ("newest red" when the newest commit was already red and the older ones were not read), passed_by (null, or for a --pr
     pass on a red main the rule list: "pin-fix", "named-red+own-run") and refused (null, or for a --pr call a red main refused, each rule that
     said no as {"rule", "why"}: the sentence stderr carries) and quicker (null, or for a repo with "main_queue" and a hidden red the way the
-    message named as quicker: "handles", "rerun" or "wait")."""
+    message named as quicker: "handles", "rerun" or "wait") and handles_issues (null, or for a --pr call on a repo that asks an issue of a
+    Handles line, {red sha: issue number} for each Handles line an issue backed; a refusal for a Handles line with no issue has the rule "handles-no-issue")."""
     m = VERDICT_WORD.match(lines[0]) if lines else None
     append_log(hidden_log_path(),
                {"ts": utc(started), "duration_ms": round((time.time() - started) * 1000), "repo": spec["github"], "action": action, "pr": pr,
                 "verdict": m.group(1) if m else "ERROR", "exit": code, "hidden": rec.get("hidden", []), "cache": rec.get("cache"),
                 "reads": READS[0], "skipped": rec.get("skipped"), "passed_by": rec.get("passed_by"), "refused": rec.get("refused"),
-                "quicker": rec.get("quicker")})
+                "quicker": rec.get("quicker"), "handles_issues": rec.get("handles_issues")})
 
 
 VERDICT_WORD = re.compile(r"^[^:]+: (GREEN|RED|UNTESTED|ERROR)\b")

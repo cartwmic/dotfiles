@@ -592,7 +592,11 @@ class HiddenRed(base.Fixture):
         self.assertIn("`flaky test` label or the `bug` label", err)   # both ways, in one sentence
         self.assertIn('gh issue create --repo cartwmic/dotfiles --label "flaky test"', err)
         self.assertIn(f"Handles: {self.c2}", err)
-        self.assertIn("named-red+own-run", [r["rule"] for r in self.log_lines()[-1]["refused"]])
+        row = self.log_lines()[-1]
+        rules = [r["rule"] for r in row["refused"]]
+        self.assertIn("handles-no-issue", rules)   # a field a count can read, not only the sentence
+        self.assertNotIn("named-red+own-run", rules)
+        self.assertIsNone(row["handles_issues"])
 
     def test_a_handles_line_passes_with_an_issue_that_holds_the_sha_and_carries_either_label(self):
         for labels in (("flaky test",), ("bug",), ("bug", "enhancement")):
@@ -600,6 +604,7 @@ class HiddenRed(base.Fixture):
                 rc, out, err = self.handles_world(base.names(self.c2), {50: base.backing(self.c2, labels=labels)})
                 self.assertEqual(rc, 0, out + err)
                 self.assertIn("passed as a red-main fix", out)
+                self.assertEqual(self.log_lines()[-1]["handles_issues"], {self.c2: "50"})   # which issue backed which red, for the log
 
     def test_a_handles_line_is_refused_when_the_issue_does_not_hold_the_sha_or_has_neither_label_or_is_a_pull_request_or_is_not_there(self):
         wrong = {"a short sha in the body": base.backing(self.c2[:7], labels=("flaky test",)),
@@ -614,6 +619,7 @@ class HiddenRed(base.Fixture):
                 rc, out, err = self.handles_world(base.names(self.c2), {} if row is None else {50: row})
                 self.assertEqual(rc, 1, out)
                 self.assertIn("names no issue on record for it", err)
+                self.assertIn("handles-no-issue", [r["rule"] for r in self.log_lines()[-1]["refused"]])
 
     def test_the_issue_must_be_named_in_the_same_message_as_the_line(self):
         names = base.names(self.c2, issue=None)
@@ -630,6 +636,7 @@ class HiddenRed(base.Fixture):
         rc, out, err = self.handles_world(reverts)
         self.assertEqual(rc, 0, out + err)
         self.assertIn("passed as a red-main fix", out)
+        self.assertIsNone(self.log_lines()[-1]["handles_issues"])   # no issue backed it
 
     def test_a_pin_red_stays_exempt_while_a_handles_line_for_the_other_red_still_needs_its_issue(self):
         git(self.src, "switch", "-q", "-c", "fix", self.c3)
