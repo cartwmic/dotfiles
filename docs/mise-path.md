@@ -15,7 +15,7 @@ Full activation also put every tool's real folder ahead of `~/.zshenv`'s `op` sh
 
 ## What it costs and what it changes
 
-- A call through a shim starts `mise` first. Measured on the agent host over several runs of 30 calls each, the same version run both ways: `bookends-check --version` took 2 to 7 ms from its install folder and 50 to 70 ms through its shim; `node -e 0` took 65 to 80 ms and 95 to 145 ms. A shim adds roughly 30 to 70 ms a call, and the figures move with the load on the host, so a single run will not repeat these numbers exactly.
+- A call through a shim starts `mise` first. Measured on the agent host over several runs of 30 calls each, the same version run both ways: `bookends-check --version` took 2 to 7 ms from its install folder and 40 to 70 ms through its shim; `node -e 0` took 65 to 80 ms and 95 to 145 ms. A shim adds roughly 30 to 70 ms a call, and the figures move with the load on the host, so a single run will not repeat these numbers exactly.
 - `command -v tool` names the shim, not the install file. `mise which tool` still names the install file.
 - A shim applies the `[env]` of the config for the tool it runs, so tool-specific variables reach that tool. A command-string shell itself no longer exports mise's `[env]` variables or defines the `mise` shell function (the `mise` program is still on PATH); a program mise does not manage no longer sees a project's `[env]`.
 - A harness started from a person's terminal inherits that terminal's full-activation PATH, which has install folders behind the shims; the shims still come first, so the right version runs, but the install folders stay in the kept PATH until the harness restarts.
