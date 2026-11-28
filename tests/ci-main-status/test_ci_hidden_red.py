@@ -138,6 +138,87 @@ class HiddenRed(base.Fixture):
             self.assertIn(f"gh run rerun {run_id} --repo cartwmic/dotfiles", out)
         self.assertIn("a short sha does not count", out)
 
+    # -- which way is quicker (a main run going or queued makes a rerun wait; a pull request's run starts at once)
+    def quicker(self, rows):
+        """(stdout, the `quicker` field of the call's log line) for the red c2 under a green c3, with `rows` as the other main runs."""
+        self.dotfiles_runs([run(2 + len(rows), self.c3, "success", age=2), run(1, self.c2, "failure", age=1)] + rows)
+        rc, out = self.three_ways("--merge-gate", "dotfiles")
+        self.assertEqual(rc, 1, out)
+        return out, self.log_lines()[-1]["quicker"]
+
+    def test_with_a_main_run_going_the_message_names_the_handles_line_as_quicker(self):
+        for status in ("in_progress", "queued"):   # running, or queued for a runner: either is ahead of a rerun
+            with self.subTest(status=status):
+                out, way = self.quicker([run(10, self.c3, None, status=status, age=3)])
+                self.assertEqual(way, "handles")
+                self.assertIn("  Quicker: the `Handles:` line in a pull request. A main run is going, and a rerun starts only after it ends", out)
+                self.assertIn(f"\n      Handles: {self.c2}\n", out)   # the line to paste, on a line of its own
+                self.assertIn("gh run rerun 1 --repo cartwmic/dotfiles", out)   # the rerun is still offered
+
+    def test_a_pending_main_run_does_not_make_a_rerun_wait_it_only_takes_the_pending_ones_place(self):
+        out, way = self.quicker([run(10, self.c3, None, status="pending", age=3)])   # waiting in the group behind a run that is not there
+        self.assertEqual(way, "rerun")
+        out, way = self.quicker([run(10, self.c3, None, status="in_progress", age=3), run(11, self.c3, None, status="pending", age=4)])
+        self.assertEqual(way, "handles")
+        self.assertNotIn("2 main run", out)   # one running and one pending: a rerun waits behind one run, not two
+
+    def test_a_rerun_queued_behind_another_main_run_still_gets_the_handles_line_as_quicker(self):
+        self.attempts = {"1": {"1": {"status": "completed", "conclusion": "failure"}}}
+        self.dotfiles_runs([run(3, self.c3, None, status="in_progress", age=3), run(2, self.c3, "success", age=2),
+                            run(1, self.c2, None, status="pending", age=1, attempt=2)])   # the incident: the rerun waits behind a main run
+        rc, out = self.three_ways("--merge-gate", "dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertEqual(self.log_lines()[-1]["quicker"], "handles")
+        self.assertIn("  Quicker: the `Handles:` line in a pull request.", out)
+
+    def test_with_no_main_run_going_the_message_names_the_rerun_as_quicker(self):
+        out, way = self.quicker([])
+        self.assertEqual(way, "rerun")
+        self.assertIn("  Quicker: rerun it. No main run is going, so the rerun starts now", out)
+        self.assertIn(f"\n      Handles: {self.c2}\n", out)
+
+    def test_when_the_reds_rerun_is_already_going_or_queued_with_nothing_ahead_the_message_says_to_wait_for_it(self):
+        self.attempts = {"1": {"1": {"status": "completed", "conclusion": "failure"}}}
+        for status in ("in_progress", "queued"):
+            with self.subTest(status=status):
+                self.dotfiles_runs([run(2, self.c3, "success", age=2), run(1, self.c2, None, status=status, age=1, attempt=2)])
+                rc, out = self.three_ways("--merge-gate", "dotfiles")
+                self.assertEqual(rc, 1, out)
+                self.assertEqual(self.log_lines()[-1]["quicker"], "wait")
+                self.assertIn("  Quicker: wait for the rerun that is already going", out)
+
+    def test_with_two_reds_one_reds_rerun_going_is_ahead_of_the_other_reds_rerun(self):
+        first, second = commit(self.src, "first red"), commit(self.src, "second red")
+        tip = commit(self.src, "tip")
+        self.attempts = {"2": {"1": {"status": "completed", "conclusion": "failure"}}}
+        self.dotfiles_runs([run(4, tip, "success", age=3), run(3, second, "failure", age=2), run(2, first, None, status="in_progress", age=1, attempt=2)])
+        rc, out = self.three_ways("--merge-gate", "dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertEqual(self.log_lines()[-1]["quicker"], "handles", out)
+        self.assertNotIn("No main run is going", out)
+        self.attempts["3"] = {"1": {"status": "completed", "conclusion": "failure"}}   # both reds are rerun: nothing else to do but wait
+        self.dotfiles_runs([run(4, tip, "success", age=3), run(3, second, None, status="pending", age=2, attempt=2), run(2, first, None, status="in_progress", age=1, attempt=2)])
+        rc, out = self.three_ways("--merge-gate", "dotfiles")
+        self.assertEqual(self.log_lines()[-1]["quicker"], "wait", out)
+
+    def test_a_red_older_than_the_runs_the_gate_lists_with_its_rerun_going_is_told_to_wait(self):
+        self.script_path = self.patched(RUN_LIMIT=2)   # 2 stands for 100: the run list holds the newest runs only, and a red can be rerun for 30 days
+        self.attempts = {"1": {"1": {"status": "completed", "conclusion": "failure"}}}
+        self.dotfiles_runs([run(3, self.c3, "success", age=3), run(2, self.c3, "success", age=2), run(1, self.c2, None, status="in_progress", age=1, attempt=2)])
+        rc, out = self.three_ways("--merge-gate", "dotfiles")
+        self.assertEqual(rc, 1, out)
+        self.assertEqual(self.log_lines()[-1]["quicker"], "wait", out)
+        self.assertNotIn("No main run is going", out)
+
+    def test_a_repo_whose_main_runs_are_not_known_to_queue_gets_the_line_but_no_claim_about_quickness(self):
+        self.runs = {self.AK: [run(3, self.c3, None, status="in_progress", age=3), run(2, self.c3, "success", age=2), run(1, self.c2, "failure", age=1)]}
+        self.jobs = {"1": red_unit_jobs()}
+        rc, out = self.three_ways("--merge-gate", "agent-kit")
+        self.assertEqual(rc, 1, out)
+        self.assertNotIn("Quicker", out)
+        self.assertIsNone(self.log_lines()[-1]["quicker"])
+        self.assertIn(f"\n      Handles: {self.c2}\n", out)
+
     def test_a_later_commit_with_a_handles_line_clears_it_once_its_own_run_is_green_and_not_while_it_is_going(self):
         self.red_below_green()
         handler = self.tip_after(f"Fix c2\n\nHandles: {self.c2}")

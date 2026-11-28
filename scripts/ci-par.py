@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
 """Run the Linux unittest suites in parallel (CI).
 
-usage: ci-par.py [--per-test DIR]... [SUITE[:PATTERN]]...
+usage: ci-par.py [--per-test DIR]... [--shards N DIR [--hold ID]... [--hold-file FILE]] [SUITE[:PATTERN]]...
 
 --per-test DIR   every test id that `unittest discover -s DIR` finds runs in its own process,
                  16 at a time, with DIR as the working directory.
+--shards N DIR   the test ids that `unittest discover -s DIR` finds run in N processes (every Nth id to each, so slow tests spread),
+                 with DIR as the working directory, in the suite pool. For a suite whose start-up is dear (a process per test
+                 would pay it 600 times) and whose tests share nothing on disk. Its counts are summed under DIR. It prints the selection first, e.g.
+                 `tests/kgate: 612 ids, 15 held, the other 597 dealt round-robin to 4 parts: 150, 149, 149, 149`.
+--hold ID        with --shards: leave this test id out of the shards (a timing-bound test that fails under load). The caller runs
+                 it, and an id that DIR does not hold is an error, so a stale name cannot drop a test unseen.
+--hold-file FILE one test id a line, each held as --hold ID holds it (blank lines are skipped).
 SUITE[:PATTERN]  one `python3 -m unittest discover -s SUITE [-p PATTERN] -v` process, one per CPU at a time
                  run from the current directory (the repo root in CI).
 
@@ -92,8 +99,20 @@ def counts(output):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--per-test", action="append", default=[], metavar="DIR")
+    ap.add_argument("--shards", nargs=2, metavar=("N", "DIR"))
+    ap.add_argument("--hold", action="append", default=[], metavar="ID")
+    ap.add_argument("--hold-file", metavar="FILE")
     ap.add_argument("suites", nargs="*", metavar="SUITE[:PATTERN]")
     args = ap.parse_args()
+    if args.hold_file:
+        try:
+            args.hold += [line.strip() for line in open(args.hold_file) if line.strip()]
+        except OSError as e:
+            ap.error(f"--hold-file: {e}")
+    if args.hold and not args.shards:
+        ap.error("--hold and --hold-file need --shards")
+    if args.shards and not (args.shards[0].isdigit() and int(args.shards[0]) > 0):
+        ap.error("--shards N must be a positive integer")
 
     # name, command, cwd, pool
     jobs = []
@@ -107,6 +126,23 @@ def main():
             continue
         test_count += len(ids)
         jobs += [(tid, [sys.executable, "-m", "unittest", tid], d, "test", d) for tid in ids]
+    if args.shards:
+        n, d = int(args.shards[0]), args.shards[1]
+        try:
+            ids = list_tests(d)
+            if [h for h in args.hold if h not in ids]:
+                raise RuntimeError(f"--hold names tests that {d} does not hold: {[h for h in args.hold if h not in ids]}")
+        except RuntimeError as e:
+            failures.append((d, 0.0, str(e)))
+        else:
+            listed = len(ids)
+            ids = [i for i in ids if i not in args.hold]
+            print(f"{d}: {listed} ids, {len(args.hold)} held, the other {len(ids)} dealt round-robin to {n} parts: "
+                  + ", ".join(str(len(ids[k::n])) for k in range(n)), flush=True)
+            for k in range(n):
+                part = ids[k::n]
+                if part:   # no ids would make unittest discover everything in DIR
+                    jobs.append((f"{d} [part {k + 1} of {n}]", [sys.executable, "-m", "unittest", "-v", *part], d, "suite", d))
     for spec in args.suites:
         suite, _, pattern = spec.partition(":")
         cmd = [sys.executable, "-m", "unittest", "discover", "-s", suite, "-v"]

@@ -27,6 +27,7 @@ python3 scripts/ci-par.py \\
   'tests/beta:check_*.py' \\
   tests/pkg || status=1
 python3 -m unittest discover -s tests/tail -v
+python3 scripts/ci-par.py --shards 4 tests/sharded --hold-file tests/sharded/held.txt || status=1
 """
 WORKFLOW = """\
       - name: macOS suite
@@ -36,7 +37,7 @@ WORKFLOW = """\
 """
 RUN = [
     "tests/js/run.test.mjs", "ext/a/index.test.ts", "ext/a/other.test.ts", "ext/c/first.test.mjs", "ext/c/second.test.mjs", "tests/slow/test_x.py", "tests/alpha/test_a.py",
-    "tests/pkg/sub/test_deep.py", "tests/tail/test_t.py", "tests/mac/test_m.py",
+    "tests/pkg/sub/test_deep.py", "tests/tail/test_t.py", "tests/mac/test_m.py", "tests/sharded/test_s.py",
 ]
 
 
@@ -75,7 +76,7 @@ class CheckCiCoverage(unittest.TestCase):
 
     def test_each_kind_of_runner_line_counts_as_running_its_files(self):
         # Removing a file from the scratch repository would hide a runner line the script failed to read; so add a file under each and expect no complaint.
-        for path in ("tests/alpha/test_more.py", "tests/slow/test_more.py", "tests/tail/test_more.py", "tests/mac/test_more.py", "tests/pkg/test_top.py"):
+        for path in ("tests/alpha/test_more.py", "tests/slow/test_more.py", "tests/tail/test_more.py", "tests/mac/test_more.py", "tests/sharded/test_more.py", "tests/pkg/test_top.py"):
             self.write(path, "")
         code, out = self.run_script()
         self.assertEqual(code, 0, out)
@@ -210,7 +211,7 @@ class CheckCiCoverage(unittest.TestCase):
         self.write("tests/orphan2/test_p.py", "")
         code, out = self.run_script()
         self.assertEqual(code, 1, out)
-        self.assertIn("12 test files: 10 run by CI, 1 named in scripts/ci-not-run.txt, 1 neither", out)  # the 10 files in RUN, plus the listed one and the orphan
+        self.assertIn("13 test files: 11 run by CI, 1 named in scripts/ci-not-run.txt, 1 neither", out)  # the 11 files in RUN, plus the listed one and the orphan
         self.assertIn("a test file is test_*.py, test-*.py, *_test.py, *.test.{ts,tsx,mjs,js,cjs} or *.spec.{ts,tsx,mjs,js,cjs}", out)
 
     def test_git_and_node_modules_are_not_searched(self):
